@@ -1,5 +1,11 @@
 # Roadmap
 
+<p align="center">
+  <a href="ROADMAP.md"><img alt="English" src="https://img.shields.io/badge/English-1f6feb?style=for-the-badge"></a>
+  <a href="ROADMAP.zh-CN.md"><img alt="简体中文" src="https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-d73a4a?style=for-the-badge"></a>
+</p>
+<p align="center"><sub>Language: click a badge to switch · 语言：点击徽章切换</sub></p>
+
 Every milestone is committed and tagged (`v1.0`, `v2.0`, ...) before the next one starts.
 
 | Version | Theme | Must include | Done when |

@@ -1,5 +1,11 @@
 # maio-cluster
 
+<p align="center">
+  <a href="README.md"><img alt="English" src="https://img.shields.io/badge/English-1f6feb?style=for-the-badge"></a>
+  <a href="README.zh-CN.md"><img alt="简体中文" src="https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-d73a4a?style=for-the-badge"></a>
+</p>
+<p align="center"><sub>Language: click a badge to switch · 语言：点击徽章切换</sub></p>
+
 A large-model inference service backend for distributed LANs.
 
 `maio` is a lightweight, ollama-like command-line tool and HTTP service built on top of
@@ -30,8 +36,13 @@ make smoke   # end-to-end smoke test (no GPU required)
 
 ```bash
 make build
-sudo install maio-cluster     # canonical install command (packaged form)
-# from a source checkout use the same installer: sudo bash ./maio-cluster
+
+# from a source checkout (installs /usr/local/bin/maio and writes /etc/maio/maio.conf)
+sudo bash ./maio-cluster
+
+# packaged form (installer/package name = repository name)
+sudo install maio-cluster
+
 # then edit /etc/maio/maio.conf and point llama_bin at your llama-server
 ```
 
@@ -109,8 +120,9 @@ internal/toml       minimal TOML reader
 deploy/install.sh
 scripts/smoke.sh
 index.toml
+docs/               roadmap
 ```
 
 ## License
 
-To be decided by the project owner.
+MIT — see [LICENSE](LICENSE).
