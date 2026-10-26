@@ -5,7 +5,7 @@ VERSION ?= 0.1.0-dev
 .PHONY: build test vet fmt install uninstall smoke clean
 
 build:
-	$(GO) build -trimpath -ldflags "-s -w -X github.com/ShieldDog-ACE/maio--cluster/internal/cli.Version=$(VERSION)" -o $(BIN) .
+	$(GO) build -trimpath -ldflags "-s -w -X github.com/ShieldDog-ACE/maio-cluster/internal/cli.Version=$(VERSION)" -o $(BIN) .
 
 test:
 	$(GO) test ./...

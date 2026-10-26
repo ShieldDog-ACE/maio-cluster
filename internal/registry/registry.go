@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/ShieldDog-ACE/maio--cluster/internal/config"
-	"github.com/ShieldDog-ACE/maio--cluster/internal/naming"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/config"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/naming"
 )
 
 // Entry is one item of the listing.

@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ShieldDog-ACE/maio--cluster/internal/config"
-	"github.com/ShieldDog-ACE/maio--cluster/internal/engine"
-	"github.com/ShieldDog-ACE/maio--cluster/internal/registry"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/config"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/engine"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/registry"
 )
 
 // Server is the maio HTTP service.

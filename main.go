@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/ShieldDog-ACE/maio--cluster/internal/cli"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/cli"
 )
 
 func main() {

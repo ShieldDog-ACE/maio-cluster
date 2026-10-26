@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ShieldDog-ACE/maio--cluster/internal/config"
-	"github.com/ShieldDog-ACE/maio--cluster/internal/toml"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/config"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/toml"
 )
 
 // Index maps a model name to its direct download URL.

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ShieldDog-ACE/maio--cluster/internal/toml"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/toml"
 )
 
 const (

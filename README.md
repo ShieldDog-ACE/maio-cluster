@@ -1,4 +1,4 @@
-# maio--cluster
+# maio-cluster
 
 A large-model inference service backend for distributed LANs.
 
@@ -30,7 +30,8 @@ make smoke   # end-to-end smoke test (no GPU required)
 
 ```bash
 make build
-sudo bash deploy/install.sh
+sudo install maio-cluster     # canonical install command (packaged form)
+# from a source checkout use the same installer: sudo bash ./maio-cluster
 # then edit /etc/maio/maio.conf and point llama_bin at your llama-server
 ```
 
@@ -65,7 +66,7 @@ Model names are lowercase with hyphens: `DeepSeek v4.1` is normalized to `deepse
 ## Commands
 
 ```text
-sudo install maio-c                              install maio itself
+sudo install maio-cluster                        install maio itself
 maio sudo install <name> [root]                  download a model into <root>/<name>/
 maio sudo install <name> [root] --url <url>      install from a direct link
 maio sudo install <name> [root] --url <path>     register an existing local GGUF

@@ -20,14 +20,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ShieldDog-ACE/maio--cluster/internal/config"
-	"github.com/ShieldDog-ACE/maio--cluster/internal/download"
-	"github.com/ShieldDog-ACE/maio--cluster/internal/engine"
-	"github.com/ShieldDog-ACE/maio--cluster/internal/index"
-	"github.com/ShieldDog-ACE/maio--cluster/internal/naming"
-	"github.com/ShieldDog-ACE/maio--cluster/internal/registry"
-	"github.com/ShieldDog-ACE/maio--cluster/internal/server"
-	"github.com/ShieldDog-ACE/maio--cluster/internal/systemd"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/config"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/download"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/engine"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/index"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/naming"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/registry"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/server"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/systemd"
 )
 
 // Version can be overridden at build time with -ldflags.
@@ -697,7 +697,7 @@ func printHelp() {
 usage: maio [sudo] <command> [args]
 
 install
-  sudo install maio-c                 install maio itself
+  sudo install maio-cluster                install maio itself
   maio sudo install <name> [root]     install a model into <root>/<name>/
   maio sudo install <name> --url URL  install from a direct link
   maio sudo install <name> --url /abs/x.gguf  register a local model in place

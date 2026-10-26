@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ShieldDog-ACE/maio--cluster/internal/config"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/config"
 )
 
 var healthClient = &http.Client{Timeout: 2 * time.Second}

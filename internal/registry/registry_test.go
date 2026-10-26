@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ShieldDog-ACE/maio--cluster/internal/config"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/config"
 )
 
 func TestScanAndFind(t *testing.T) {
