@@ -1,0 +1,3 @@
+# Model index: name = direct download URL (a fast mirror is preferred).
+# Example:
+# "deepseek-v4.1" = "https://www.modelscope.cn/models/xxx/deepseek-v4.1-Q4_K_M.gguf"

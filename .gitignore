@@ -1,0 +1,17 @@
+# build output
+bin/
+*.exe
+*.o
+*.a
+*.so
+*.so.*
+
+# models and partial downloads
+*.gguf
+*.part
+*.safetensors
+
+# local config and secrets
+.env
+*.key
+*.log

@@ -1,0 +1,14 @@
+# Roadmap
+
+Every milestone is committed and tagged (`v1.0`, `v2.0`, ...) before the next one starts.
+
+| Version | Theme | Must include | Done when |
+| --- | --- | --- | --- |
+| **V1** | Usable: register / download / delete | Register (download and write `maio.toml`; register existing local GGUF in place), download (mirror, resume, checksums), delete (`rm` removes the model directory), minimal loop of `list/show/run/serve/ps/stop/boot` | A real model runs on real hardware; after `rm` the directory and config are gone; `make smoke` passes |
+| **V2** | Understandable: errors + hardware awareness | Unified error codes with actionable hints; hardware probing (GPU/VRAM/CPU/RAM/disk); VRAM budget checks before loading (reject instead of OOM); model capability probing (context/quantization/vision); `maio doctor` | Every failure explains cause and fix; hardware report matches `nvidia-smi`; budget rejections suggest alternatives |
+| **V3** | Dependable: server-grade stability and security | systemd supervision and crash recovery; concurrency and queueing; request auth; rate limiting; audit log; runtime metrics; upgrade and rollback; 24/7 operation | 24h soak with zero crashes and no leaks; unauthorized requests get 401; service and resident models recover after reboot |
+| **V4** | Connected: distributed and LAN | mDNS node discovery; node registration; remote install and model distribution; cross-node inference routing; multi-node placement | Two machines set up in one pass; node A can call models on node B; reconnect does not disturb local service |
+| **V5** | Complete: full control | Full hardware control (devices/VRAM/threads/context/batch size/quantization); graphical UI; bilingual error messages with command/config syntax hints (line and column) | All tuning possible without editing files; UI covers daily operations; errors are bilingual and locate the problem |
+
+Upgrade rule: each version only adds what it must include. An update that does not improve stability,
+security or speed is not made.
