@@ -15,35 +15,43 @@ import (
 type Code string
 
 const (
-	Internal    Code = "MAIO-E000"
-	Usage       Code = "MAIO-E001"
-	NotFound    Code = "MAIO-E002"
-	Conflict    Code = "MAIO-E003"
-	Permission  Code = "MAIO-E004"
-	IO          Code = "MAIO-E005"
-	Download    Code = "MAIO-E006"
-	Verify      Code = "MAIO-E007"
-	Engine      Code = "MAIO-E008"
-	Hardware    Code = "MAIO-E009"
-	Config      Code = "MAIO-E010"
-	Service     Code = "MAIO-E011"
-	Interrupted Code = "MAIO-E012"
+	Internal     Code = "MAIO-E000"
+	Usage        Code = "MAIO-E001"
+	NotFound     Code = "MAIO-E002"
+	Conflict     Code = "MAIO-E003"
+	Permission   Code = "MAIO-E004"
+	IO           Code = "MAIO-E005"
+	Download     Code = "MAIO-E006"
+	Verify       Code = "MAIO-E007"
+	Engine       Code = "MAIO-E008"
+	Hardware     Code = "MAIO-E009"
+	Config       Code = "MAIO-E010"
+	Service      Code = "MAIO-E011"
+	Interrupted  Code = "MAIO-E012"
+	Unauthorized Code = "MAIO-E013"
+	RateLimited  Code = "MAIO-E014"
+	Busy         Code = "MAIO-E015"
+	Timeout      Code = "MAIO-E016"
 )
 
 var exitCodes = map[Code]int{
-	Internal:    1,
-	Usage:       2,
-	NotFound:    3,
-	Conflict:    4,
-	Permission:  5,
-	IO:          5,
-	Download:    6,
-	Verify:      7,
-	Engine:      8,
-	Hardware:    9,
-	Config:      10,
-	Service:     11,
-	Interrupted: 130,
+	Internal:     1,
+	Usage:        2,
+	NotFound:     3,
+	Conflict:     4,
+	Permission:   5,
+	IO:           5,
+	Download:     6,
+	Verify:       7,
+	Engine:       8,
+	Hardware:     9,
+	Config:       10,
+	Service:      11,
+	Unauthorized: 12,
+	RateLimited:  13,
+	Busy:         14,
+	Timeout:      15,
+	Interrupted:  130,
 }
 
 // Error is a maio failure with a stable code and an optional repair hint.

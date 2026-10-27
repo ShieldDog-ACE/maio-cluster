@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Build a Debian package for maio-cluster.
-# Usage: VERSION=2.0.0 ARCH=amd64 bash deploy/build-deb.sh
+# Usage: VERSION=3.0.0 ARCH=amd64 bash deploy/build-deb.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:-2.0.0}"
+VERSION="${VERSION:-3.0.0}"
 ARCH="${ARCH:-$(dpkg --print-architecture 2>/dev/null || echo amd64)}"
 OUT="$ROOT/dist"
 DEB="$OUT/maio-cluster_${VERSION}_${ARCH}.deb"
@@ -26,6 +26,8 @@ install -D -m 0755 "$ROOT/deploy/deb/prerm" "$STAGE/DEBIAN/prerm"
 install -D -m 0755 "$ROOT/deploy/deb/postrm" "$STAGE/DEBIAN/postrm"
 install -D -m 0644 "$ROOT/LICENSE" "$STAGE/usr/share/doc/maio-cluster/copyright"
 install -D -m 0644 "$ROOT/README.md" "$STAGE/usr/share/doc/maio-cluster/README.md"
+install -D -m 0644 "$ROOT/README.zh-CN.md" "$STAGE/usr/share/doc/maio-cluster/README.zh-CN.md"
+[ -f "$ROOT/CHANGELOG.md" ] && install -D -m 0644 "$ROOT/CHANGELOG.md" "$STAGE/usr/share/doc/maio-cluster/CHANGELOG.md"
 
 chmod 0755 "$STAGE"
 SIZE_KB="$(du -sk "$STAGE/usr" | awk '{print $1}')"

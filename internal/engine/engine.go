@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/ShieldDog-ACE/maio-cluster/internal/gguf"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/hardware"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/logging"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/owner"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/vram"
 )
 
@@ -44,19 +46,31 @@ type Instance struct {
 	Started   string `json:"started"`
 	ProcStart string `json:"proc_start,omitempty"`
 	Context   uint32 `json:"context,omitempty"`
+	Parallel  int    `json:"parallel,omitempty"`
+	KVType    string `json:"kv_type,omitempty"`
 	VRAMBytes uint64 `json:"vram_bytes,omitempty"`
 }
 
 // Options controls one engine start.
 type Options struct {
-	Ctx         int    // context length; 0 = config/default
-	Force       bool   // skip the VRAM budget check
-	ContextFlag string // how to name the context switch in budget hints
+	Ctx          int    // context length; 0 = config/default
+	Force        bool   // skip the VRAM budget check
+	ContextFlag  string // how to name the context switch in budget hints
+	Parallel     int    // server slots; 0 = config/default
+	KVType       string // f16, q8_0, q4_0; "" = config/default
+	Threads      int    // CPU threads; 0 = config/default
+	FlashAttn    string // auto, on, off; "" = config/default
+	NoMmap       bool   // force --no-mmap for this start
+	LogVerbosity int    // llama.cpp -lv; 0 = config/default
 }
 
 // Manager manages engine child processes.
 type Manager struct {
 	Conf *config.Global
+
+	// loadMu serializes starts and stops. VRAM budgeting is only meaningful if
+	// two concurrent requests cannot both pass the check and then both start.
+	loadMu sync.Mutex
 }
 
 // New creates a manager.
@@ -81,6 +95,9 @@ func (m *Manager) List() ([]Instance, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
+		if e.Name() == "resident.json" {
+			continue
+		}
 		p := filepath.Join(m.Conf.RunDir(), e.Name())
 		data, err := os.ReadFile(p)
 		if err != nil {
@@ -90,6 +107,10 @@ func (m *Manager) List() ([]Instance, error) {
 		var inst Instance
 		if err := json.Unmarshal(data, &inst); err != nil {
 			logging.Warn("engine.instance_invalid", "path", p, "error", err.Error())
+			continue
+		}
+		if inst.Name == "" || inst.Port <= 0 || inst.PID <= 0 {
+			logging.Warn("engine.instance_invalid", "path", p, "error", "missing name, port or pid")
 			continue
 		}
 		out = append(out, inst)
@@ -115,14 +136,116 @@ func (m *Manager) Get(name string) (*Instance, error) {
 	return &inst, nil
 }
 
+// engineConfig is the resolved engine tuning for one start.
+type engineConfig struct {
+	ctx      int
+	parallel int
+	threads  int
+	kvType   string
+	flash    string
+	noMmap   bool
+	logLevel int
+}
+
+func (m *Manager) resolveOptions(opt Options) engineConfig {
+	c := engineConfig{
+		ctx:      opt.Ctx,
+		parallel: opt.Parallel,
+		threads:  opt.Threads,
+		kvType:   opt.KVType,
+		flash:    opt.FlashAttn,
+		noMmap:   opt.NoMmap,
+		logLevel: opt.LogVerbosity,
+	}
+	if c.ctx <= 0 {
+		c.ctx = m.Conf.CtxSize
+	}
+	if c.parallel <= 0 {
+		c.parallel = m.Conf.Parallel
+	}
+	if c.parallel < 1 {
+		c.parallel = 1
+	}
+	if c.threads <= 0 {
+		c.threads = m.Conf.Threads
+	}
+	if c.kvType == "" {
+		c.kvType = m.Conf.KVType
+	}
+	if c.kvType == "" {
+		c.kvType = "f16"
+	}
+	if c.flash == "" {
+		c.flash = m.Conf.FlashAttn
+	}
+	if c.flash == "" {
+		c.flash = "auto"
+	}
+	if !c.noMmap && m.Conf.Mmap == 0 {
+		c.noMmap = true
+	}
+	if c.logLevel <= 0 {
+		c.logLevel = m.Conf.LogVerbosity
+	}
+	if c.logLevel < 0 {
+		c.logLevel = 0
+	}
+	return c
+}
+
+// instanceMatches reports whether an existing process already has the tuning
+// the caller asked for. A field that was not persisted (old V2 instance state)
+// is treated as a match when the default applies, and as stale otherwise.
+func instanceMatches(inst *Instance, c engineConfig) bool {
+	if inst == nil {
+		return false
+	}
+	if c.ctx > 0 && inst.Context > 0 && int(inst.Context) != c.ctx {
+		return false
+	}
+	instParallel := inst.Parallel
+	if instParallel < 1 {
+		instParallel = 1
+	}
+	if instParallel != c.parallel {
+		return false
+	}
+	if inst.KVType != "" && inst.KVType != c.kvType {
+		return false
+	}
+	if inst.KVType == "" && c.kvType != "f16" {
+		return false
+	}
+	return true
+}
+
 // Ensure makes sure a model is loaded and ready, reusing an existing process.
 func (m *Manager) Ensure(ctx context.Context, md *config.Model, opt Options) (*Instance, error) {
+	cfg := m.resolveOptions(opt)
 	if inst, err := m.Get(md.Name); err == nil && inst != nil {
-		if m.Health(inst.Port) == nil && processAlive(inst.PID) {
+		if m.Health(inst.Port) == nil && processAlive(inst.PID) && instanceMatches(inst, cfg) {
 			return inst, nil
 		}
-		_ = m.Stop(md.Name)
 	}
+	if cfg.kvType != "f16" && cfg.flash == "off" {
+		return nil, errs.New(errs.Config, "a quantized KV cache requires flash attention").
+			WithHint(`set flash_attn = "auto" or "on", or use kv_type = "f16"`)
+	}
+
+	// Starts are serialized so two concurrent requests cannot both pass the
+	// VRAM budget and then both start an engine.
+	m.loadMu.Lock()
+	defer m.loadMu.Unlock()
+
+	if inst, err := m.Get(md.Name); err == nil && inst != nil {
+		if m.Health(inst.Port) == nil && processAlive(inst.PID) && instanceMatches(inst, cfg) {
+			return inst, nil
+		}
+		if err := m.stopLocked(md.Name); err != nil {
+			logging.Warn("engine.replace_failed", "model", md.Name, "error", err.Error())
+		}
+	}
+
 	filePath := md.FilePath()
 	st, err := os.Stat(filePath)
 	if err != nil {
@@ -140,10 +263,7 @@ func (m *Manager) Ensure(ctx context.Context, md *config.Model, opt Options) (*I
 	if err != nil {
 		return nil, err
 	}
-	ctxLen := opt.Ctx
-	if ctxLen <= 0 {
-		ctxLen = m.Conf.CtxSize
-	}
+	ctxLen := cfg.ctx
 	if ctxLen <= 0 {
 		ctxLen = int(info.ContextLength)
 	}
@@ -155,7 +275,21 @@ func (m *Manager) Ensure(ctx context.Context, md *config.Model, opt Options) (*I
 		}
 	}
 	hw := hardware.Detect(m.Conf.ModelsRoot)
-	budget := vram.Estimate(info, st.Size()+extraWeights, ctxLen, hw)
+
+	// Pick the largest number of slots that fits. A request for more slots than
+	// the GPU can hold degrades to a smaller number instead of failing.
+	chosen := cfg.parallel
+	var budget *vram.Budget
+	for p := cfg.parallel; p >= 1; p-- {
+		b := vram.EstimateWith(info, st.Size()+extraWeights, vram.Options{
+			Context: ctxLen, Parallel: p, KVType: cfg.kvType,
+		}, hw)
+		budget = b
+		chosen = p
+		if !hw.HasGPU() || b.Fits() || opt.Force {
+			break
+		}
+	}
 	if hw.HasGPU() && !budget.Fits() && !opt.Force {
 		logging.Error("engine.vram_refused", nil,
 			"model", md.Name, "needed", budget.Total, "free", budget.Free, "ctx", budget.Context)
@@ -165,6 +299,12 @@ func (m *Manager) Ensure(ctx context.Context, md *config.Model, opt Options) (*I
 		}
 		return nil, errs.Newf(errs.Hardware, "not enough GPU memory for %s: %s", md.Name, budget.Summary()).
 			WithHint("%s", budget.Suggestion(flag))
+	}
+	if chosen < cfg.parallel {
+		logging.Warn("engine.parallel_reduced", "model", md.Name, "requested", cfg.parallel,
+			"chosen", chosen, "reason", "vram")
+		fmt.Fprintf(os.Stderr, "maio: warning: %s fits only %d parallel slot(s), not %d; reduce ctx_size or use kv_type = \"q8_0\" to allow more\n",
+			md.Name, chosen, cfg.parallel)
 	}
 	if hw.HasGPU() && !budget.KVKnown {
 		logging.Warn("engine.vram_estimate_partial", "model", md.Name)
@@ -193,29 +333,40 @@ func (m *Manager) Ensure(ctx context.Context, md *config.Model, opt Options) (*I
 			WithHint("set state_dir to a writable directory, or run with sudo")
 	}
 	logPath := m.Conf.EngineLogPath(md.Name)
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	logFile, err := m.openEngineLog(logPath)
 	if err != nil {
 		return nil, errs.Wrap(errs.Permission, err, "cannot open engine log %s", logPath).
 			WithHint("check state_dir permissions, or run with sudo")
 	}
 
+	ctxToPass := ctxLen
+	if ctxToPass <= 0 {
+		ctxToPass = int(info.ContextLength)
+	}
 	args := []string{
 		"-m", filePath,
 		"--host", "127.0.0.1",
 		"--port", strconv.Itoa(port),
 		"--no-webui",
+		"--parallel", strconv.Itoa(chosen),
+		"--cache-type-k", cfg.kvType,
+		"--cache-type-v", cfg.kvType,
+		"--flash-attn", cfg.flash,
+		"-lv", strconv.Itoa(cfg.logLevel),
 	}
 	if hw.HasGPU() {
 		args = append(args, "-ngl", "99")
 	} else {
 		args = append(args, "-ngl", "0")
 	}
-	ctxToPass := ctxLen
-	if ctxToPass <= 0 {
-		ctxToPass = int(info.ContextLength)
-	}
 	if ctxToPass > 0 {
 		args = append(args, "-c", strconv.Itoa(ctxToPass))
+	}
+	if cfg.threads > 0 {
+		args = append(args, "-t", strconv.Itoa(cfg.threads))
+	}
+	if cfg.noMmap {
+		args = append(args, "--no-mmap")
 	}
 	if mmproj != "" {
 		args = append(args, "--mmproj", mmproj)
@@ -223,8 +374,9 @@ func (m *Manager) Ensure(ctx context.Context, md *config.Model, opt Options) (*I
 		fmt.Fprintf(os.Stderr, "maio: warning: %s looks like a vision model but no mmproj*.gguf was found; vision input is unavailable\n", md.Name)
 	}
 	logging.Info("engine.start", "model", md.Name, "bin", bin, "port", port,
-		"ctx", ctxToPass, "mmproj", mmproj, "vram_needed", budget.Total, "vram_free", budget.Free)
-	fmt.Fprintf(os.Stderr, "maio: loading %s (port %d, ctx %d)\n", md.Name, port, ctxToPass)
+		"ctx", ctxToPass, "parallel", chosen, "kv_type", cfg.kvType, "flash_attn", cfg.flash,
+		"mmproj", mmproj, "vram_needed", budget.Total, "vram_free", budget.Free)
+	fmt.Fprintf(os.Stderr, "maio: loading %s (port %d, ctx %d, slots %d, kv %s)\n", md.Name, port, ctxToPass, chosen, cfg.kvType)
 
 	cmd := exec.Command(bin, args...)
 	cmd.Env = m.childEnv(bin)
@@ -249,6 +401,8 @@ func (m *Manager) Ensure(ctx context.Context, md *config.Model, opt Options) (*I
 		Started:   time.Now().Format(time.RFC3339),
 		ProcStart: procStart(cmd.Process.Pid),
 		Context:   uint32(ctxToPass),
+		Parallel:  chosen,
+		KVType:    cfg.kvType,
 		VRAMBytes: budget.Total,
 	}
 	if err := m.waitReady(ctx, port, done); err != nil {
@@ -266,12 +420,19 @@ func (m *Manager) Ensure(ctx context.Context, md *config.Model, opt Options) (*I
 		signalGroup(cmd.Process.Pid, syscall.SIGKILL)
 		return nil, err
 	}
-	logging.Info("engine.ready", "model", md.Name, "port", port, "pid", inst.PID, "vram_bytes", budget.Total)
+	logging.Info("engine.ready", "model", md.Name, "port", port, "pid", inst.PID,
+		"parallel", chosen, "vram_bytes", budget.Total)
 	return inst, nil
 }
 
 // Stop stops a model's engine and cleans up its runtime state.
 func (m *Manager) Stop(name string) error {
+	m.loadMu.Lock()
+	defer m.loadMu.Unlock()
+	return m.stopLocked(name)
+}
+
+func (m *Manager) stopLocked(name string) error {
 	inst, err := m.Get(name)
 	if err != nil {
 		return err
@@ -314,17 +475,52 @@ func (m *Manager) Stop(name string) error {
 
 // StopAll stops everything.
 func (m *Manager) StopAll() error {
+	m.loadMu.Lock()
+	defer m.loadMu.Unlock()
 	insts, err := m.List()
 	if err != nil {
 		return err
 	}
 	var firstErr error
 	for _, in := range insts {
-		if err := m.Stop(in.Name); err != nil && firstErr == nil {
+		if err := m.stopLocked(in.Name); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
 	return firstErr
+}
+
+// CleanupStale removes runtime state whose process is gone or no longer looks
+// like llama-server. Live engines are kept and can be adopted by Ensure.
+func (m *Manager) CleanupStale() (int, error) {
+	m.loadMu.Lock()
+	defer m.loadMu.Unlock()
+	insts, err := m.List()
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, in := range insts {
+		alive := processAlive(in.PID)
+		ours := alive && strings.Contains(procCmdline(in.PID), "llama-server")
+		if ours {
+			if in.ProcStart != "" {
+				if now := procStart(in.PID); now != "" && now != in.ProcStart {
+					ours = false
+				}
+			}
+		}
+		if ours {
+			continue
+		}
+		if err := os.Remove(m.instancePath(in.Name)); err != nil && !os.IsNotExist(err) {
+			logging.Warn("engine.cleanup_failed", "model", in.Name, "error", err.Error())
+			continue
+		}
+		removed++
+		logging.Warn("engine.cleanup_stale", "model", in.Name, "pid", in.PID, "alive", alive)
+	}
+	return removed, nil
 }
 
 // Health probes engine health.
@@ -373,7 +569,12 @@ func (m *Manager) BinPath() (string, error) {
 	if p := os.Getenv("MAIO_LLAMA_BIN"); p != "" {
 		cands = append(cands, p)
 	}
-	cands = append(cands, "/opt/maio/bin/llama-server", "/usr/local/bin/llama-server", "/usr/bin/llama-server")
+	cands = append(cands,
+		"/opt/maio/llama/bin/llama-server",
+		"/opt/maio/bin/llama-server",
+		"/usr/local/bin/llama-server",
+		"/usr/bin/llama-server",
+	)
 	if p, err := exec.LookPath("llama-server"); err == nil {
 		cands = append(cands, p)
 	}
@@ -431,7 +632,7 @@ func (m *Manager) Version() (string, error) {
 }
 
 func (m *Manager) childEnv(bin string) []string {
-	libs := []string{filepath.Dir(bin)}
+	libs := []string{filepath.Dir(bin), filepath.Join(filepath.Dir(bin), "..", "lib"), "/opt/maio/llama/lib"}
 	if m.Conf.LlamaLib != "" {
 		for _, p := range strings.Split(m.Conf.LlamaLib, ":") {
 			if p != "" {
@@ -544,6 +745,27 @@ func procCmdline(pid int) string {
 		return ""
 	}
 	return strings.ReplaceAll(string(data), "\x00", " ")
+}
+
+// maxEngineLogBytes keeps a single engine log bounded on a 24/7 host. The
+// previous log is kept as <name>.log.1 for post-mortems.
+const maxEngineLogBytes = 8 << 20
+
+func (m *Manager) openEngineLog(path string) (*os.File, error) {
+	if st, err := os.Stat(path); err == nil && st.Size() > maxEngineLogBytes {
+		_ = os.Rename(path, path+".1")
+	}
+	runAs := m.Conf.RunAs
+	if strings.HasPrefix(path, "/home/") {
+		runAs = ""
+	}
+	owner.ChownMode(path, runAs, 0o640)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+	if err != nil {
+		return nil, err
+	}
+	owner.ChownMode(path, runAs, 0o640)
+	return f, nil
 }
 
 func tailFile(path string, lines int) string {

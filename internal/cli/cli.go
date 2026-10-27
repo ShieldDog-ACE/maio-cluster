@@ -22,6 +22,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/ShieldDog-ACE/maio-cluster/internal/auth"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/config"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/download"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/engine"
@@ -29,16 +30,21 @@ import (
 	"github.com/ShieldDog-ACE/maio-cluster/internal/gguf"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/hardware"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/index"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/lockfile"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/logging"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/naming"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/owner"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/registry"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/resident"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/sdnotify"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/server"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/systemd"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/tune"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/vram"
 )
 
 // Version can be overridden at build time with -ldflags.
-var Version = "2.0.0-dev"
+var Version = "3.0.0-dev"
 
 // Run is the entry point and returns the exit code.
 func Run(args []string) int {
@@ -47,7 +53,13 @@ func Run(args []string) int {
 		return 2
 	}
 	switch args[0] {
-	case "-h", "--help", "help":
+	case "-h", "--help":
+		printHelp()
+		return 0
+	case "help":
+		if len(args) > 1 {
+			return Run(append([]string{args[1]}, "-h"))
+		}
 		printHelp()
 		return 0
 	case "version", "--version", "-v":
@@ -63,7 +75,8 @@ func Run(args []string) int {
 		errs.Print(os.Stderr, err)
 		return errs.ExitCode(err)
 	}
-	logging.Init(conf.RuntimeDir)
+	logging.InitOwned(conf.RuntimeDir, conf.RunAs)
+	ensureStateOwnership(conf)
 	defer logging.Close()
 	start := time.Now()
 	logging.Info("cli.start", "command", args[0], "args", sanitizeArgs(args[1:]))
@@ -75,7 +88,7 @@ func Run(args []string) int {
 func dispatch(conf *config.Global, args []string) int {
 	cmd, rest := args[0], args[1:]
 	switch cmd {
-	case "install":
+	case "install", "pull":
 		return cmdInstall(conf, rest)
 	case "list", "ls":
 		return cmdList(conf, rest)
@@ -83,14 +96,36 @@ func dispatch(conf *config.Global, args []string) int {
 		return cmdShow(conf, rest)
 	case "rm", "uninstall":
 		return cmdRm(conf, rest)
+	case "cp":
+		return cmdCp(conf, rest)
+	case "load":
+		return cmdLoad(conf, rest)
 	case "run":
 		return cmdRun(conf, rest)
 	case "serve":
 		return cmdServe(conf, rest)
 	case "ps":
 		return cmdPs(conf, rest)
-	case "stop":
+	case "stop", "unload":
 		return cmdStop(conf, rest)
+	case "status":
+		return cmdStatus(conf, rest)
+	case "stats":
+		return cmdStats(conf, rest)
+	case "service":
+		return cmdService(conf, rest)
+	case "restart":
+		return cmdRestart(conf, rest)
+	case "config":
+		return cmdConfig(conf, rest)
+	case "token", "key", "keys":
+		return cmdToken(conf, rest)
+	case "upgrade":
+		return cmdUpgrade(conf, rest)
+	case "rollback":
+		return cmdRollback(conf, rest)
+	case "completion":
+		return cmdCompletion(conf, rest)
 	case "boot":
 		return cmdBoot(conf, rest)
 	case "doctor":
@@ -652,6 +687,24 @@ func cmdRm(conf *config.Global, args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	// Ask a running service to unload first; a resident model must not be
+	// deleted while its engine is still mapped into memory.
+	client := newAPIClient(conf)
+	ctx, cancel := contextShort()
+	reachable := client.reachable(ctx)
+	cancel()
+	if reachable {
+		ctx, cancel := contextLong()
+		var out map[string]any
+		err := client.post(ctx, "/api/unload", map[string]string{"model": md.Name}, &out)
+		cancel()
+		if err != nil {
+			if ae, ok := err.(*apiError); ok && ae.Status != http.StatusNotFound {
+				return printAPIError(err)
+			}
+			logging.Warn("uninstall.unload_failed", "model", md.Name, "error", err.Error())
+		}
+	}
 	inst, instErr := engine.New(conf).Get(md.Name)
 	if instErr != nil {
 		return fail(instErr)
@@ -704,6 +757,7 @@ func cmdRm(conf *config.Global, args []string) int {
 	if filepath.IsAbs(md.Path) && !pathWithin(md.Dir, md.Path) {
 		fmt.Fprintf(os.Stderr, "maio: warning: the model file is outside the model directory and was not deleted: %s\n", md.Path)
 	}
+	_, _ = resident.Remove(conf.RunDir(), md.Name)
 	fmt.Printf("deleted %s\n", md.Dir)
 	logging.Info("uninstall.done", "model", md.Name, "path", md.Dir, "bytes", size)
 	return 0
@@ -717,12 +771,46 @@ func pathWithin(dir, p string) bool {
 func cmdRun(conf *config.Global, args []string) int {
 	ctxLen := 0
 	force := false
+	parallel := 0
+	kvType := ""
+	threads := 0
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-h", "--help":
-			fmt.Println("usage: maio run <name> [prompt] [--ctx N] [--force]")
+			fmt.Println("usage: maio run <name> [prompt] [--ctx N] [--parallel N] [--kv f16|q8_0|q4_0] [--threads N] [--force]")
 			return 0
+		case "--parallel":
+			if i+1 >= len(args) {
+				return usagef("--parallel requires a positive integer")
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 1 {
+				return usagef("invalid --parallel value %q", args[i])
+			}
+			parallel = n
+		case "--kv":
+			if i+1 >= len(args) {
+				return usagef("--kv requires f16, q8_0 or q4_0")
+			}
+			i++
+			switch strings.ToLower(args[i]) {
+			case "f16", "q8_0", "q4_0":
+				kvType = strings.ToLower(args[i])
+			default:
+				return usagef("invalid --kv value %q", args[i])
+			}
+		case "--threads":
+			if i+1 >= len(args) {
+				return usagef("--threads requires a positive integer")
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 1 {
+				return usagef("invalid --threads value %q", args[i])
+			}
+			threads = n
 		case "--ctx":
 			if i+1 >= len(args) {
 				return usagef("--ctx requires a positive integer")
@@ -752,7 +840,9 @@ func cmdRun(conf *config.Global, args []string) int {
 	ctx, stop := signalContext()
 	defer stop()
 	eng := engine.New(conf)
-	inst, err := eng.Ensure(ctx, md, engine.Options{Ctx: ctxLen, Force: force})
+	inst, err := eng.Ensure(ctx, md, engine.Options{
+		Ctx: ctxLen, Force: force, Parallel: parallel, KVType: kvType, Threads: threads,
+	})
 	if err != nil {
 		if ctx.Err() != nil {
 			return fail(errs.Wrap(errs.Interrupted, ctx.Err(), "interrupted while loading %s", md.Name))
@@ -880,7 +970,8 @@ func cmdServe(conf *config.Global, args []string) int {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-h", "--help":
-			fmt.Println("usage: maio serve [--host address] [--port port]")
+			fmt.Println("usage: maio serve [--host ADDR] [--port N] [--api-key KEY] [--no-auth]")
+			fmt.Println("       [--max-concurrency N] [--parallel N] [--memory-limit MB]")
 			return 0
 		case "--host":
 			if i+1 >= len(args) {
@@ -898,6 +989,44 @@ func cmdServe(conf *config.Global, args []string) int {
 				return usagef("invalid port: %s", args[i])
 			}
 			port = p
+		case "--api-key":
+			if i+1 >= len(args) {
+				return usagef("--api-key requires a value")
+			}
+			i++
+			conf.APIKey = strings.TrimSpace(args[i])
+		case "--no-auth":
+			conf.Auth = "off"
+		case "--max-concurrency":
+			if i+1 >= len(args) {
+				return usagef("--max-concurrency requires a value")
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 1 {
+				return usagef("invalid --max-concurrency value %q", args[i])
+			}
+			conf.MaxConcurrency = n
+		case "--parallel":
+			if i+1 >= len(args) {
+				return usagef("--parallel requires a value")
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 1 || n > 128 {
+				return usagef("invalid --parallel value %q", args[i])
+			}
+			conf.Parallel = n
+		case "--memory-limit":
+			if i+1 >= len(args) {
+				return usagef("--memory-limit requires a value in MiB")
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 0 {
+				return usagef("invalid --memory-limit value %q", args[i])
+			}
+			conf.MemoryLimitMB = n
 		default:
 			return usagef("unknown argument %s", args[i])
 		}
@@ -905,6 +1034,41 @@ func cmdServe(conf *config.Global, args []string) int {
 	if strings.TrimSpace(host) == "" {
 		return usagef("--host must not be empty")
 	}
+	// The listener, auth policy and metrics all use this effective address.
+	conf.Host = host
+	conf.Port = port
+	if conf.Auth == "off" && !auth.IsLoopbackHost(host) && conf.AllowInsecure != 1 {
+		return fail(errs.New(errs.Config, "refusing to disable API authentication on a non-loopback listener").
+			WithHint("set auth = \"auto\" (recommended), or set allow_insecure = 1 if this machine is isolated"))
+	}
+	if conf.Auth == "off" && !auth.IsLoopbackHost(host) {
+		fmt.Fprintf(os.Stderr, "maio: warning: API authentication is disabled on %s; anyone who can reach this port can run inference\n", host)
+	}
+
+	if info, err := tune.Apply(conf.MemoryLimitMB, conf.MaxProcs, conf.MaxOpenFiles); err != nil {
+		fmt.Fprintf(os.Stderr, "maio: warning: %v\n", err)
+		logging.Warn("serve.tune_failed", "error", err.Error())
+	} else if conf.MemoryLimitMB > 0 {
+		logging.Info("serve.tuned", "memory_limit_mb", conf.MemoryLimitMB,
+			"nofile_soft", info.NoFileSoft, "nofile_hard", info.NoFileHard)
+	}
+
+	owner.ChownMode(conf.LockFile(), conf.RunAs, 0o644)
+	lock, err := lockfile.Acquire(conf.LockFile())
+	if err != nil {
+		return fail(errs.New(errs.Conflict, err.Error()).
+			WithHint("stop the other instance with: maio service stop; or remove the stale lock only after checking ps"))
+	}
+	owner.ChownMode(lock.Path(), conf.RunAs, 0o644)
+	defer lock.Release()
+
+	srv, err := server.New(conf, engine.New(conf), Version)
+	if err != nil {
+		return fail(err)
+	}
+	// server.New may have generated the key after the earlier ownership pass.
+	owner.ChownMode(conf.AuthKeyFile(), conf.RunAs, 0o600)
+	owner.ChownMode(filepath.Dir(conf.AuthKeyFile()), conf.RunAs, 0o700)
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -913,41 +1077,82 @@ func cmdServe(conf *config.Global, args []string) int {
 				WithHint("ports below 1024 require root: sudo maio serve --port %d", port))
 		}
 		return fail(errs.Wrap(errs.Service, err, "cannot listen on %s", addr).
-			WithHint("the port may be in use; choose another one with --port, or check with: ss -ltnp"))
+			WithHint("the port may be in use; check with: ss -ltnp, or choose another --port"))
 	}
 	ctx, stop := signalContext()
 	defer stop()
-	srv := server.New(conf, engine.New(conf), Version)
 	httpSrv := &http.Server{
 		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 15 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
 		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 20,
+		MaxHeaderBytes:    64 << 10,
 	}
-	stopIdle := srv.StartIdleUnloader(ctx, server.IdleUnload)
-	defer stopIdle()
+	srv.Start(ctx)
+
+	sd := sdnotify.New()
+	go sd.RunWatchdog(ctx.Done())
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = sd.Stopping()
+		_ = sd.Status("draining requests")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 			logging.Warn("serve.shutdown_failed", "error", err.Error())
+			_ = httpSrv.Close()
 		}
+		srv.Shutdown(shutdownCtx)
 	}()
-	fmt.Printf("maio service started at http://%s (pid %d)\n", addr, os.Getpid())
+
+	ai := srv.AuthInfo()
+	scheme := "http"
+	if conf.TLSEnabled() {
+		scheme = "https"
+	}
+	fmt.Printf("maio %s service started at %s://%s (pid %d)\n", Version, scheme, addr, os.Getpid())
+	fmt.Printf("  auth            : %s\n", authSummary(ai))
+	if ai.Required && (ai.Source == "file" || ai.Generated) && ai.KeyFile != "" {
+		fmt.Printf("  key file        : %s (show with: maio token --show)\n", ai.KeyFile)
+	}
+	fmt.Printf("  memory limit    : %d MiB, max concurrency %d, queue %d, slots %d, kv %s\n",
+		conf.MemoryLimitMB, conf.MaxConcurrency, conf.MaxQueue, conf.Parallel, conf.KVType)
+	if ai.Generated {
+		fmt.Printf("  new API key     : generated in %s; read it with: maio token --show\n", ai.KeyFile)
+	}
 	logging.Info("serve.start", "addr", addr, "pid", os.Getpid(), "version", Version,
-		"models_root", conf.ModelsRoot)
-	err = httpSrv.Serve(ln)
+		"models_root", conf.ModelsRoot, "auth_required", ai.Required, "auth_source", ai.Source,
+		"max_concurrency", conf.MaxConcurrency, "max_queue", conf.MaxQueue,
+		"parallel", conf.Parallel, "kv_type", conf.KVType, "memory_limit_mb", conf.MemoryLimitMB)
+	_ = sd.Status(fmt.Sprintf("serving on %s", addr))
+	_ = sd.Ready()
+
+	if conf.TLSEnabled() {
+		err = httpSrv.ServeTLS(ln, conf.TLSCert, conf.TLSKey)
+	} else {
+		err = httpSrv.Serve(ln)
+	}
+	stop()
 	if err != nil && err != http.ErrServerClosed {
 		logging.Error("serve.failed", errs.Wrap(errs.Service, err, "service failed"))
 		return fail(errs.Wrap(errs.Service, err, "service failed on %s", addr))
 	}
-	if err := srv.Eng.StopAll(); err != nil {
-		logging.Warn("serve.stop_engines_failed", "error", err.Error())
-	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv.Shutdown(shutdownCtx)
 	fmt.Println("maio service stopped")
 	logging.Info("serve.stop", "addr", addr)
 	return 0
+}
+
+func authSummary(info auth.Info) string {
+	if !info.Required {
+		if info.Loopback {
+			return "disabled (loopback listener)"
+		}
+		return "disabled (allow_insecure = 1)"
+	}
+	return fmt.Sprintf("required (source: %s)", info.Source)
 }
 
 func cmdPs(conf *config.Global, args []string) int {
@@ -964,6 +1169,51 @@ func cmdPs(conf *config.Global, args []string) int {
 		}
 	}
 	eng := engine.New(conf)
+	client := newAPIClient(conf)
+	ctx, cancel := contextShort()
+	reachable := client.reachable(ctx)
+	cancel()
+	if reachable {
+		ctx, cancel := contextShort()
+		defer cancel()
+		var resp struct {
+			Models []struct {
+				Name      string `json:"name"`
+				Port      int    `json:"port"`
+				PID       int    `json:"pid"`
+				Status    string `json:"status"`
+				Resident  bool   `json:"resident"`
+				ExpiresAt string `json:"expires_at"`
+				Details   struct {
+					ContextLength uint32 `json:"context_length"`
+					Quantization  string `json:"quantization_level"`
+				} `json:"details"`
+			} `json:"models"`
+		}
+		if err := client.get(ctx, "/api/ps", &resp); err != nil {
+			return printAPIError(err)
+		}
+		if asJSON {
+			_ = json.NewEncoder(os.Stdout).Encode(resp.Models)
+			return 0
+		}
+		if len(resp.Models) == 0 {
+			fmt.Println("(no models loaded)")
+			return 0
+		}
+		fmt.Printf("%-24s %6s %8s %-8s %-6s %s\n", "NAME", "PORT", "PID", "STATUS", "PIN", "EXPIRES")
+		for _, r := range resp.Models {
+			expires := r.ExpiresAt
+			if r.Resident {
+				expires = "resident"
+			}
+			if expires == "" {
+				expires = "-"
+			}
+			fmt.Printf("%-24s %6d %8d %-8s %-6v %s\n", r.Name, r.Port, r.PID, r.Status, r.Resident, expires)
+		}
+		return 0
+	}
 	insts, err := eng.List()
 	if err != nil {
 		return fail(err)
@@ -1018,12 +1268,27 @@ func cmdStop(conf *config.Global, args []string) int {
 			pos = append(pos, a)
 		}
 	}
-	eng := engine.New(conf)
+	client := newAPIClient(conf)
+	ctx, cancel := contextShort()
+	reachable := client.reachable(ctx)
+	cancel()
 	if all {
-		fmt.Println("stopping all loaded models")
+		if reachable {
+			ctx, cancel := contextLong()
+			defer cancel()
+			var out map[string]any
+			if err := client.post(ctx, "/api/unload?all=1", map[string]any{"all": true}, &out); err != nil {
+				return printAPIError(err)
+			}
+			fmt.Println("stopped all loaded models")
+			return 0
+		}
+		eng := engine.New(conf)
 		if err := eng.StopAll(); err != nil {
 			return fail(err)
 		}
+		_ = resident.Save(conf.RunDir(), nil)
+		fmt.Println("stopped all loaded models")
 		return 0
 	}
 	if len(pos) != 1 {
@@ -1033,11 +1298,24 @@ func cmdStop(conf *config.Global, args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	if reachable {
+		ctx, cancel := contextLong()
+		defer cancel()
+		var out map[string]any
+		if err := client.post(ctx, "/api/unload", map[string]string{"model": name}, &out); err != nil {
+			return printAPIError(err)
+		}
+		fmt.Printf("stopped %s\n", name)
+		logging.Info("stop.done", "model", name, "via", "service")
+		return 0
+	}
+	eng := engine.New(conf)
 	inst, err := eng.Get(name)
 	if err != nil {
 		return fail(err)
 	}
 	if inst == nil {
+		_, _ = resident.Remove(conf.RunDir(), name)
 		fmt.Printf("model %s is not loaded\n", name)
 		logging.Info("stop.noop", "model", name)
 		return 0
@@ -1045,6 +1323,7 @@ func cmdStop(conf *config.Global, args []string) int {
 	if err := eng.Stop(name); err != nil {
 		return fail(err)
 	}
+	_, _ = resident.Remove(conf.RunDir(), name)
 	fmt.Printf("stopped %s\n", name)
 	return 0
 }
@@ -1122,7 +1401,11 @@ func cmdBoot(conf *config.Global, args []string) int {
 	}
 	logging.Info("boot.save", "boot", boot, "config", confPath, "mode", string(mode))
 	if boot == 1 {
-		if err := systemd.Enable(mode, exe, confPath); err != nil {
+		if err := systemd.EnableOpts(systemd.Options{
+			Mode: mode, Exe: exe, ConfPath: confPath,
+			StateDir: conf.StateDir, ModelsRoot: conf.ModelsRoot,
+			RunAs: conf.RunAs, Port: conf.Port,
+		}); err != nil {
 			return fail(err)
 		}
 		st := systemd.Query(mode)
@@ -1276,53 +1559,108 @@ func boolYes(v bool) string {
 	return "no"
 }
 
+// ensureStateOwnership makes root-created state usable by a systemd service
+// running as conf.RunAs. It only touches maio's own state files; model data is
+// left alone.
+func ensureStateOwnership(conf *config.Global) {
+	if os.Geteuid() != 0 || conf.RunAs == "" {
+		return
+	}
+	// Never take ownership of a per-user state directory under /home.
+	if strings.HasPrefix(conf.RuntimeDir, "/home/") {
+		return
+	}
+	dirs := []string{
+		conf.RuntimeDir,
+		conf.RunDir(),
+		conf.LogDir(),
+		filepath.Join(conf.RuntimeDir, "auth"),
+		filepath.Join(conf.RuntimeDir, "upgrade"),
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o750); err == nil {
+			owner.ChownMode(d, conf.RunAs, 0o750)
+		}
+	}
+	owner.ChownMode(conf.AuthKeyFile(), conf.RunAs, 0o600)
+	owner.ChownMode(filepath.Join(conf.RuntimeDir, "run", "resident.json"), conf.RunAs, 0o644)
+	for _, pattern := range []string{
+		filepath.Join(conf.RunDir(), "*.json"),
+		filepath.Join(conf.LogDir(), "*.log"),
+		filepath.Join(conf.LogDir(), "*.log.1"),
+		conf.LockFile(),
+	} {
+		matches, _ := filepath.Glob(pattern)
+		for _, m := range matches {
+			owner.ChownMode(m, conf.RunAs, 0o640)
+		}
+	}
+	owner.ChownMode(conf.LockFile(), conf.RunAs, 0o644)
+}
+
 func printHelp() {
-	fmt.Print(`maio - lightweight model management CLI built on llama.cpp
+	fmt.Print(`maio - Linux-only, server-grade llama.cpp model service
 
 Usage:
   maio <command> [arguments]
   sudo maio <command> [arguments]    for system-wide changes
 
 Models:
-  sudo maio install <name> [root]           install a model into <root>/<name>/
-  sudo maio install <name> [root] --url URL install from a direct link
-  sudo maio install <name> [root] --url /abs/model.gguf
-                                            register an existing local GGUF
-  maio list [--wide]                        list installed models
-  maio show <name>                          show config, file and capabilities
+  maio pull|install <name> [root] [--url URL|PATH] [--sha256 HEX]
+                                            download or register a GGUF model
+  maio list [--wide] [--json]               list installed models
+  maio show <name> [--json]                 show config, file and capabilities
+  maio cp <source> <destination>            duplicate a model (hardlink first)
   maio rm <name> [-y]                       delete a model and its files
-  maio run <name> [prompt] [--ctx N] [--force]
+  maio run <name> [prompt] [--ctx N] [--parallel N] [--kv f16|q8_0|q4_0]
                                             chat or run one prompt locally
 
 Service:
-  maio serve [--host ADDR] [--port N]       start the HTTP service
-  maio ps                                   list loaded models
+  maio serve [--host ADDR] [--port N] [--api-key KEY] [--no-auth]
+                                            run the HTTP service in the foreground
+  maio ps [--json]                          list loaded models
+  maio load <name>                          load and pin a model (restored on restart)
   maio stop <name> | --all                  unload model(s) and free VRAM
+  maio status [--json] [--user]             service + health + memory + auth
+  maio stats [--json]                       live metrics and per-model state
+  maio service <start|stop|restart|status|enable|disable|logs> [--user]
+                                            control the systemd service
+  maio restart [--user]                     restart the systemd service
   sudo maio boot 1|0 [--user]               start-on-boot switch (default 1)
-  maio boot 1|0 --user                      per-user service (no root)
 
-Diagnostics:
-  maio doctor [--json]                      check config, hardware, engine, models
+Security and configuration:
+  maio token [show] [--show] [--json]       show the API key (masked by default)
+  maio token rotate|set|clear               manage the API key
+  maio config [show] [--json]               show effective configuration
+  maio config path|get|set|edit|keys        inspect or edit maio.conf
+  maio doctor [--json]                      check config, hardware, engine, service
   maio logs [--tail N] [--json] [--path]    read the audit log
-  maio version [--json]                     print version and paths
+  maio version [--json]                     print version, paths and API mode
+  maio completion bash|zsh|fish             generate shell completion
+  maio upgrade <binary> [--no-restart]      atomic upgrade with rollback backup
+  maio rollback [--no-restart]              restore the previous binary
 
 Install maio itself:
   sudo apt install maio-cluster              from the packaged repository
   sudo bash maio-cluster                     from a source checkout
+  sudo apt install maio-llama                minimal Linux x86-64 llama-server
 
 Environment:
-  MAIO_CONF   global config path (default /etc/maio/maio.conf or per-user)
-  MAIO_LOG    audit log path override
-  MAIO_DEBUG  1 = print underlying causes on errors
-  MAIO_LANG   reserved for language packs (English for now)
+  MAIO_CONF     global config path (default /etc/maio/maio.conf or per-user)
+  MAIO_LOG      audit log path override
+  MAIO_API_KEY  API key override (highest precedence)
+  MAIO_DEBUG    1 = print underlying causes on errors
+  MAIO_LANG     reserved for language packs (English for now)
 
 Exit codes:
   0 ok, 2 usage, 3 not found, 4 conflict, 5 permission/io, 6 download,
-  7 verification, 8 engine, 9 hardware, 10 config, 11 service, 130 interrupted
+  7 verification, 8 engine, 9 hardware, 10 config, 11 service,
+  12 unauthorized, 13 rate limited, 14 busy, 15 timeout, 130 interrupted
 
 Notes:
   - model names are lowercase; spaces become - (DeepSeek v4.1 -> deepseek-v4.1)
   - use "sudo maio ...", not "maio sudo ..."
-  - the audit log records installs, downloads, removals and engine actions
+  - a non-loopback listener requires an API key unless allow_insecure = 1
+  - the control plane targets < 200 MiB RSS; model memory is separate
 `)
 }

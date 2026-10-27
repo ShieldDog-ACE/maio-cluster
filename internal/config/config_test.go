@@ -124,3 +124,74 @@ func TestModelRejectsUnknownKey(t *testing.T) {
 		t.Fatal("unknown model key should fail")
 	}
 }
+
+func TestV3KeysRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "maio.conf")
+	t.Setenv("MAIO_CONF", p)
+	body := `boot = 1
+models_root = "` + dir + `/models"
+state_dir = "` + dir + `/state"
+host = "0.0.0.0"
+port = 12000
+auth = "on"
+api_key = "0123456789abcdef0123456789abcdef"
+rate_limit = 120
+rate_burst = 20
+max_concurrency = 4
+max_queue = 8
+queue_timeout = 30
+request_timeout = 600
+max_body_mb = 8
+idle_unload = 60
+access_log = 1
+parallel = 3
+threads = 8
+kv_type = "q8_0"
+flash_attn = "auto"
+mmap = 1
+memory_limit_mb = 160
+max_procs = 6
+max_open_files = 65536
+restore = 1
+run_as = "maio"
+tls_cert = "/etc/maio/tls.crt"
+tls_key = "/etc/maio/tls.key"
+`
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g, err := LoadGlobal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Auth != "on" || g.MaxConcurrency != 4 || g.MaxQueue != 8 || g.Parallel != 3 ||
+		g.KVType != "q8_0" || g.MemoryLimitMB != 160 || g.RunAs != "maio" || !g.TLSEnabled() {
+		t.Fatalf("unexpected V3 config: %+v", g)
+	}
+	if g.AuthKeyFile() != filepath.Join(dir, "state", "auth", "api.key") {
+		t.Fatalf("AuthKeyFile = %q", g.AuthKeyFile())
+	}
+}
+
+func TestV3EnumValidation(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "maio.conf")
+	t.Setenv("MAIO_CONF", p)
+	for _, body := range []string{
+		`auth = "maybe"`,
+		`kv_type = "f32"`,
+		`flash_attn = "sometimes"`,
+		`parallel = 0`,
+		`max_concurrency = 0`,
+		`tls_cert = "/tmp/cert"`,
+		`run_as = "Not Valid"`,
+	} {
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadGlobal(); err == nil {
+			t.Fatalf("expected an error for %q", body)
+		}
+	}
+}

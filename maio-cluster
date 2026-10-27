@@ -48,22 +48,76 @@ if [ ! -x "$SRC" ]; then
 fi
 
 install -m 0755 "$SRC" "$DEST"
-install -d -m 0755 "$CONF_DIR" "$STATE_DIR" "$MODELS_ROOT" "$STATE_DIR/run" "$STATE_DIR/log"
+install -d -m 0755 "$CONF_DIR" "$STATE_DIR" "$MODELS_ROOT"
+install -d -m 0750 "$STATE_DIR/run" "$STATE_DIR/log" "$STATE_DIR/upgrade"
+install -d -m 0700 "$STATE_DIR/auth"
+
+# Dedicated unprivileged service account for the default config.
+if ! getent passwd maio >/dev/null 2>&1; then
+  adduser --system --group --home "$STATE_DIR" --no-create-home \
+    --shell /usr/sbin/nologin maio >/dev/null 2>&1 || true
+fi
+for grp in video render; do
+  if getent group "$grp" >/dev/null 2>&1; then
+    adduser maio "$grp" >/dev/null 2>&1 || true
+  fi
+done
+if getent passwd maio >/dev/null 2>&1; then
+  chown maio:maio "$STATE_DIR" 2>/dev/null || true
+  chown -R maio:maio "$STATE_DIR/run" "$STATE_DIR/log" "$STATE_DIR/auth" "$STATE_DIR/upgrade" 2>/dev/null || true
+  chgrp maio "$MODELS_ROOT" 2>/dev/null || true
+  chmod 0750 "$MODELS_ROOT" 2>/dev/null || true
+fi
 
 if [ ! -f "$CONF" ]; then
   cat > "$CONF" <<EOF
 # maio global config (one per machine; not maio.toml)
 # Start-on-boot is on by default. Use "sudo maio boot 0" to disable it.
+
 boot        = $BOOT
 models_root = "$MODELS_ROOT"
 state_dir   = "$STATE_DIR"
-host        = "127.0.0.1"
-port        = 11434
 mirror      = "https://www.modelscope.cn"
-llama_bin   = ""
-llama_lib   = ""
-ctx_size    = 0
+
+host           = "127.0.0.1"
+port           = 11434
+auth           = "auto"
+api_key        = ""
+allow_insecure = 0
+trust_proxy    = 0
+cors           = 0
+tls_cert       = ""
+tls_key        = ""
+tls_ca         = ""
+
+rate_limit      = 600
+rate_burst      = 120
+max_concurrency = 8
+max_queue       = 64
+queue_timeout   = 300
+request_timeout = 0
+max_body_mb     = 16
+idle_unload     = 300
+access_log      = 1
+
+llama_bin  = ""
+llama_lib  = ""
+ctx_size   = 0
+parallel   = 2
+threads    = 0
+kv_type    = "f16"
+flash_attn = "auto"
+mmap       = 1
+llama_log_verbosity = 3
+
+memory_limit_mb = 180
+max_procs       = 0
+max_open_files  = 1048576
+restore         = 1
+run_as          = "maio"
 EOF
+  chgrp maio "$CONF" 2>/dev/null || true
+  chmod 0640 "$CONF" 2>/dev/null || true
   echo "default config written: $CONF"
 else
   echo "keeping existing config: $CONF"
@@ -82,4 +136,4 @@ if [ "$START" -eq 1 ]; then
 else
   echo "start-on-boot not configured (--no-start)"
 fi
-echo "next: set llama_bin in $CONF to your llama-server, then run: maio doctor"
+echo "next: set llama_bin in $CONF to your llama-server (or install maio-llama), then run: maio doctor"

@@ -14,7 +14,7 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-VERSION="${VERSION:-2.0.0}"
+VERSION="${VERSION:-3.0.0}"
 ARCH="${ARCH:-$(dpkg --print-architecture 2>/dev/null || echo amd64)}"
 DEB="$ROOT/dist/maio-cluster_${VERSION}_${ARCH}.deb"
 

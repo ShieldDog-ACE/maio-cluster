@@ -24,3 +24,7 @@ dist/
 # task books live outside this repository
 docs/taskbook/
 *任务书*/
+
+# python test helpers
+__pycache__/
+*.pyc

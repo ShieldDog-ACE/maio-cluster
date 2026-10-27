@@ -34,14 +34,23 @@ func cmdVersion(args []string) int {
 		conf = config.DefaultGlobal()
 	}
 	rec := map[string]any{
-		"version":     Version,
-		"go":          runtime.Version(),
-		"os":          runtime.GOOS,
-		"arch":        runtime.GOARCH,
-		"config":      config.ConfPath(),
-		"models_root": conf.ModelsRoot,
-		"runtime_dir": conf.RuntimeDir,
-		"log":         conf.AuditLogPath(),
+		"version":         Version,
+		"api":             "ollama+openai-compatible",
+		"go":              runtime.Version(),
+		"os":              runtime.GOOS,
+		"arch":            runtime.GOARCH,
+		"config":          config.ConfPath(),
+		"models_root":     conf.ModelsRoot,
+		"runtime_dir":     conf.RuntimeDir,
+		"log":             conf.AuditLogPath(),
+		"key_file":        conf.AuthKeyFile(),
+		"listen":          fmt.Sprintf("%s:%d", conf.Host, conf.Port),
+		"auth":            conf.Auth,
+		"memory_limit_mb": conf.MemoryLimitMB,
+		"max_concurrency": conf.MaxConcurrency,
+		"max_queue":       conf.MaxQueue,
+		"parallel":        conf.Parallel,
+		"kv_type":         conf.KVType,
 	}
 	if confErr != "" {
 		rec["config_error"] = confErr
@@ -57,6 +66,10 @@ func cmdVersion(args []string) int {
 	fmt.Printf("  models_root : %s\n", conf.ModelsRoot)
 	fmt.Printf("  runtime_dir : %s\n", conf.RuntimeDir)
 	fmt.Printf("  audit log   : %s\n", conf.AuditLogPath())
+	fmt.Printf("  api         : ollama + openai-compatible\n")
+	fmt.Printf("  listen      : %s:%d (auth %s)\n", conf.Host, conf.Port, conf.Auth)
+	fmt.Printf("  memory      : limit %d MiB, concurrency %d, queue %d\n",
+		conf.MemoryLimitMB, conf.MaxConcurrency, conf.MaxQueue)
 	if confErr != "" {
 		fmt.Fprintf(os.Stderr, "maio: warning: %s\n", confErr)
 	}

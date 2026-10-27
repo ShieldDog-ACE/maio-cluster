@@ -46,6 +46,17 @@ func Normalize(raw string) (string, error) {
 	return out, nil
 }
 
+// NormalizeLoose is the best-effort form used for persisted state: it returns
+// the canonical name, or "" when the input cannot be normalized. It never
+// reports an error because a corrupt state file must not break startup.
+func NormalizeLoose(raw string) string {
+	out, err := Normalize(raw)
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
 // Validate checks a name that is already in canonical form.
 func Validate(name string) error {
 	if name == "" {

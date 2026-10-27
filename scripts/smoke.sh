@@ -67,12 +67,17 @@ mirror      = ""
 llama_bin   = ""
 llama_lib   = ""
 ctx_size    = 0
+auth        = "on"
+api_key     = "0123456789abcdef0123456789abcdef"
+rate_limit  = 0
 EOF
 export MAIO_CONF="$TMP/etc/maio.conf"
+export XDG_CONFIG_HOME="$TMP/xdg"
+KEY="0123456789abcdef0123456789abcdef"
 
 echo "== 2. basic commands and the new sudo syntax =="
 "$BIN" version >/dev/null || fail "maio version"
-"$BIN" --help | grep -q "sudo maio install" || fail "help is missing sudo maio install"
+"$BIN" --help | grep -q "maio pull|install" || fail "help is missing the model commands"
 expect_exit 2 "$BIN" sudo install x
 grep -q "no longer supported" "$TMP/err.log" || fail "maio sudo migration message missing"
 expect_exit 2 "$BIN" not-a-command
@@ -128,6 +133,13 @@ grep -q 'path   = "x.gguf"' "$TMP/models/keep-model/maio.toml" || fail "in-place
 expect_exit 4 "$BIN" install keep-model "$TMP/models" --url "$TMP/models/keep-model/x.gguf"
 pass "local registration (copy / in place / duplicate guard)"
 
+"$BIN" cp copy-model copy-alias >/dev/null || fail "cp"
+[ -f "$TMP/models/copy-alias/maio.toml" ] || fail "cp did not write maio.toml"
+grep -q 'name   = "copy-alias"' "$TMP/models/copy-alias/maio.toml" || fail "cp name is wrong"
+"$BIN" rm copy-alias -y >/dev/null || fail "rm of the copied model"
+pass "cp (hardlink or copy) + cleanup"
+
+
 echo "== 6. permission policy (non-root install to a system path must fail) =="
 if [ "$(id -u)" -ne 0 ]; then
   expect_exit 5 "$BIN" install perm-test /var/lib/maio/models --url "http://127.0.0.1:$HTTP_PORT/tiny.gguf"
@@ -152,10 +164,14 @@ for _ in $(seq 1 50); do
   curl -s -o /dev/null "http://127.0.0.1:$API_PORT/api/version" && break
   sleep 0.2
 done
-curl -s "http://127.0.0.1:$API_PORT/api/version" | grep -q "2.0.0" || fail "/api/version"
-curl -s "http://127.0.0.1:$API_PORT/api/tags" | grep -q "copy-model" || fail "/api/tags"
-curl -s "http://127.0.0.1:$API_PORT/api/tags" | grep -q "keep-model" || fail "/api/tags missing keep-model"
-pass "/api/version + /api/tags"
+curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$API_PORT/api/tags" | grep -q 401 || fail "missing 401 for an unauthenticated request"
+curl -s -H "Authorization: Bearer $KEY" "http://127.0.0.1:$API_PORT/api/version" | grep -q "3.0.0" || fail "/api/version"
+curl -s -H "Authorization: Bearer $KEY" "http://127.0.0.1:$API_PORT/api/tags" | grep -q "copy-model" || fail "/api/tags"
+curl -s -H "Authorization: Bearer $KEY" "http://127.0.0.1:$API_PORT/api/tags" | grep -q "keep-model" || fail "/api/tags missing keep-model"
+curl -s "http://127.0.0.1:$API_PORT/healthz" | grep -q '"ok"' || fail "/healthz"
+curl -s -H "Authorization: Bearer $KEY" "http://127.0.0.1:$API_PORT/metrics" | grep -q "maio_build_info" || fail "/metrics"
+curl -s -H "Authorization: Bearer $KEY" "http://127.0.0.1:$API_PORT/api/stats" | grep -q '"metrics"' || fail "/api/stats"
+pass "/api/version + /api/tags + auth + healthz + metrics"
 
 echo "== 9. doctor, logs and version JSON =="
 set +e
@@ -178,7 +194,7 @@ pass "doctor --json reports hardware, engine, models and logs"
 python3 - "$TMP/version.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
-assert d["version"].startswith("2.0.0"), d
+assert d["version"].startswith("3.0.0"), d
 assert d["models_root"], d
 PY
 "$BIN" logs --path | grep "maio.log" >/dev/null || fail "logs --path"
@@ -198,6 +214,17 @@ set -e
 [ "$CODE" -eq 10 ] || fail "unknown config key should exit 10 (got $CODE)"
 grep -q "unknown key" "$TMP/badconf.err" || fail "unknown config key was not reported"
 pass "unknown config keys are reported with exit code 10"
+
+echo "== 11. V3 CLI surface =="
+"$BIN" config show --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["values"]["max_concurrency"] == 8, d'
+"$BIN" config get parallel | grep -q '^2$' || fail "config get parallel"
+"$BIN" token --show | grep -q "$KEY" || fail "token --show"
+"$BIN" token | grep -q '\*' || fail "token masking"
+"$BIN" completion bash | grep -q '_maio' || fail "bash completion"
+"$BIN" status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["reachable"] is True, d'
+"$BIN" stats --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["metrics"]["version"].startswith("3.0.0"), d'
+"$BIN" ps --json | python3 -c 'import json,sys; assert isinstance(json.load(sys.stdin), list)'
+pass "config / token / completion / status / stats / ps"
 
 echo
 echo "all checks passed"

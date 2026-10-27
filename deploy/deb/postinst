@@ -1,8 +1,33 @@
 #!/bin/sh
-# maio-cluster post-install: create runtime directories and start on boot.
+# maio-cluster post-install: create the service user, runtime directories and
+# start on boot.
 set -e
 
-install -d -m 0755 /var/lib/maio /var/lib/maio/models /var/lib/maio/run /var/lib/maio/log 2>/dev/null || true
+# Dedicated, unprivileged service account. The binary and model files stay
+# root-owned; only the state directory belongs to maio.
+if ! getent passwd maio >/dev/null 2>&1; then
+    adduser --system --group --home /var/lib/maio --no-create-home \
+        --shell /usr/sbin/nologin maio >/dev/null 2>&1 || true
+fi
+for grp in video render; do
+    if getent group "$grp" >/dev/null 2>&1; then
+        adduser maio "$grp" >/dev/null 2>&1 || true
+    fi
+done
+
+install -d -m 0755 /var/lib/maio /var/lib/maio/models 2>/dev/null || true
+install -d -m 0750 /var/lib/maio/run /var/lib/maio/log /var/lib/maio/upgrade 2>/dev/null || true
+install -d -m 0700 /var/lib/maio/auth 2>/dev/null || true
+if getent passwd maio >/dev/null 2>&1; then
+    chown maio:maio /var/lib/maio 2>/dev/null || true
+    chown -R maio:maio /var/lib/maio/run /var/lib/maio/log /var/lib/maio/auth /var/lib/maio/upgrade 2>/dev/null || true
+    chgrp maio /var/lib/maio/models 2>/dev/null || true
+    chmod 0750 /var/lib/maio/models 2>/dev/null || true
+fi
+if [ -f /etc/maio/maio.conf ]; then
+    chgrp maio /etc/maio/maio.conf 2>/dev/null || true
+    chmod 0640 /etc/maio/maio.conf 2>/dev/null || true
+fi
 
 if [ "$1" = "configure" ]; then
     boot=1

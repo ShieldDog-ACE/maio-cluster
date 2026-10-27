@@ -61,3 +61,18 @@ func TestNoGPU(t *testing.T) {
 		t.Fatalf("context = %d", b.Context)
 	}
 }
+
+func TestParallelAndKVType(t *testing.T) {
+	one := EstimateWith(testInfo(), 1<<30, Options{Context: 4096, Parallel: 1, KVType: "f16"}, testHW(16384))
+	two := EstimateWith(testInfo(), 1<<30, Options{Context: 4096, Parallel: 2, KVType: "f16"}, testHW(16384))
+	if two.KV <= one.KV {
+		t.Fatalf("parallel KV should grow: %d -> %d", one.KV, two.KV)
+	}
+	q8 := EstimateWith(testInfo(), 1<<30, Options{Context: 4096, Parallel: 2, KVType: "q8_0"}, testHW(16384))
+	if q8.KV >= two.KV {
+		t.Fatalf("q8_0 KV should shrink: %d -> %d", two.KV, q8.KV)
+	}
+	if q8.KVType != "q8_0" || q8.Parallel != 2 {
+		t.Fatalf("unexpected budget fields: %+v", q8)
+	}
+}

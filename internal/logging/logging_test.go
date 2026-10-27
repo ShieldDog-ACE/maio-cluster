@@ -42,3 +42,28 @@ func TestInitFallsBack(t *testing.T) {
 	}
 	Close()
 }
+
+func TestLogRotatesInProcess(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "maio.log")
+	l, err := InitPath(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer Close()
+	l.mu.Lock()
+	l.size = maxLogBytes + 1
+	l.mu.Unlock()
+	Info("rotate.test", "value", 1)
+	Close()
+	if _, err := os.Stat(p + ".1"); err != nil {
+		t.Fatalf("rotated file missing: %v", err)
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Size() >= maxLogBytes {
+		t.Fatalf("new log is not fresh: %d bytes", st.Size())
+	}
+}

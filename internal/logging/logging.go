@@ -18,15 +18,18 @@ import (
 	"time"
 
 	"github.com/ShieldDog-ACE/maio-cluster/internal/errs"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/owner"
 )
 
 const maxLogBytes = 10 << 20 // 10 MiB, then rotate to maio.log.1
 
 // Logger is a concurrency-safe JSONL audit logger. A nil *Logger is a no-op.
 type Logger struct {
-	mu   sync.Mutex
-	f    *os.File
-	path string
+	mu    sync.Mutex
+	f     *os.File
+	path  string
+	size  int64
+	runAs string
 }
 
 var (
@@ -38,6 +41,16 @@ var (
 // writable, it falls back to the per-user state directory. It never fails the
 // command: when no log can be opened a warning is printed once to stderr.
 func Init(stateDir string) *Logger {
+	return InitOwned(stateDir, "")
+}
+
+// InitOwned is Init plus ownership hand-off to a systemd service user. A root
+// CLI must not leave a 0600 root-owned log where the maio service cannot write.
+func InitOwned(stateDir, runAs string) *Logger {
+	// A root process must not take ownership of a per-user state directory.
+	if strings.HasPrefix(stateDir, "/home/") {
+		runAs = ""
+	}
 	candidates := make([]string, 0, 4)
 	if p := os.Getenv("MAIO_LOG"); p != "" {
 		candidates = append(candidates, p)
@@ -49,6 +62,9 @@ func Init(stateDir string) *Logger {
 
 	for _, p := range candidates {
 		if l, err := open(p); err == nil {
+			l.runAs = runAs
+			owner.ChownMode(l.path, runAs, 0o640)
+			owner.ChownMode(filepath.Dir(l.path), runAs, 0o750)
 			stdMu.Lock()
 			if std != nil {
 				std.Close()
@@ -170,7 +186,39 @@ func (l *Logger) log(level, action string, err error, kv []any) {
 	if l.f == nil {
 		return
 	}
-	_, _ = l.f.Write(append(line, '\n'))
+	n, _ := l.f.Write(append(line, '\n'))
+	l.size += int64(n)
+	if l.size > maxLogBytes {
+		l.rotateLocked()
+	}
+}
+
+// rotateLocked keeps the audit log bounded on a 24/7 host. It is called with
+// l.mu held. Rotation failures leave the current file open.
+func (l *Logger) rotateLocked() {
+	if l.f == nil || l.path == "" {
+		return
+	}
+	_ = l.f.Close()
+	if err := os.Rename(l.path, l.path+".1"); err != nil {
+		// Reopen the original file if the rename failed.
+		if f, oerr := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); oerr == nil {
+			l.f = f
+			l.size = 0
+		} else {
+			l.f = nil
+		}
+		return
+	}
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		l.f = nil
+		return
+	}
+	_ = f.Chmod(0o600)
+	owner.ChownMode(l.path, l.runAs, 0o640)
+	l.f = f
+	l.size = 0
 }
 
 // redact removes credentials and volatile query strings before persisting.
@@ -217,7 +265,11 @@ func open(path string) (*Logger, error) {
 		return nil, err
 	}
 	_ = os.Chmod(path, 0o600)
-	return &Logger{f: f, path: path}, nil
+	var size int64
+	if st, serr := f.Stat(); serr == nil {
+		size = st.Size()
+	}
+	return &Logger{f: f, path: path, size: size}, nil
 }
 
 func userStateDir() string {

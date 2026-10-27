@@ -1,6 +1,7 @@
 // Package vram estimates whether a model fits in the available GPU memory
 // before llama-server is started, so maio refuses early with an actionable
-// context suggestion instead of running into an OOM.
+// context suggestion instead of running into an OOM. The estimate includes the
+// KV cache for every parallel server slot and honours the selected KV type.
 package vram
 
 import (
@@ -11,11 +12,29 @@ import (
 )
 
 const (
-	kvBytesPerElement = 2 // llama.cpp default KV cache type is f16
-	minOverhead       = 1 << 30
-	maxContext        = 1048576
-	minContext        = 2048
+	minOverhead = 1 << 30
+	maxContext  = 1048576
+	minContext  = 2048
 )
+
+// Options controls the estimate.
+type Options struct {
+	Context  int    // tokens; 0 = model default
+	Parallel int    // llama-server slots; 0/1 = one slot
+	KVType   string // f16 (default), q8_0 or q4_0
+}
+
+// BytesPerElement returns the KV cache element size for a supported type.
+func BytesPerElement(kvType string) float64 {
+	switch kvType {
+	case "q8_0":
+		return 1
+	case "q4_0":
+		return 0.5
+	default:
+		return 2
+	}
+}
 
 // Budget is one VRAM estimate.
 type Budget struct {
@@ -29,7 +48,9 @@ type Budget struct {
 	Context    uint32
 	MaxContext uint32
 	KVKnown    bool
-	KVPerToken uint64
+	KVPerToken uint64 // per token, all slots
+	Parallel   int
+	KVType     string
 	Shortfall  uint64
 	GPUs       []hardware.GPU
 }
@@ -38,10 +59,26 @@ type Budget struct {
 // fit because the check does not apply.
 func (b *Budget) Fits() bool { return !b.HasGPU || b.Total <= b.Free }
 
-// Estimate computes the budget for a model. ctx <= 0 means the model's own
-// context length; when that is unknown, 4096 is assumed.
+// Estimate computes the budget for one slot with the default f16 KV cache.
+// Kept for compatibility with callers that do not tune the engine.
 func Estimate(info *gguf.Info, fileSize int64, ctx int, hw *hardware.Info) *Budget {
-	b := &Budget{}
+	return EstimateWith(info, fileSize, Options{Context: ctx}, hw)
+}
+
+// EstimateWith computes the budget for a configured number of slots and KV
+// type. ctx <= 0 means the model's own context length; when that is unknown,
+// 4096 is assumed.
+func EstimateWith(info *gguf.Info, fileSize int64, opt Options, hw *hardware.Info) *Budget {
+	parallel := opt.Parallel
+	if parallel < 1 {
+		parallel = 1
+	}
+	kvType := opt.KVType
+	if kvType == "" {
+		kvType = "f16"
+	}
+	ctx := opt.Context
+	b := &Budget{Parallel: parallel, KVType: kvType}
 	if hw != nil {
 		b.HasGPU = hw.HasGPU()
 		b.GPUs = hw.GPUs
@@ -63,6 +100,10 @@ func Estimate(info *gguf.Info, fileSize int64, ctx int, hw *hardware.Info) *Budg
 		b.Overhead = minOverhead
 	}
 	b.Overhead += uint64(len(b.GPUs)) * (256 << 20)
+	// Each additional slot needs its own compute buffer and bookkeeping.
+	if parallel > 1 {
+		b.Overhead += uint64(parallel-1) * (64 << 20)
+	}
 
 	if info != nil && info.BlockCount > 0 && info.HeadCountKV > 0 &&
 		info.EmbeddingLength > 0 && info.HeadCount > 0 {
@@ -70,7 +111,8 @@ func Estimate(info *gguf.Info, fileSize int64, ctx int, hw *hardware.Info) *Budg
 		if headDim == 0 {
 			headDim = 128
 		}
-		b.KVPerToken = uint64(info.BlockCount) * uint64(info.HeadCountKV) * headDim * 2 * kvBytesPerElement
+		perTokenSlot := float64(info.BlockCount) * float64(info.HeadCountKV) * float64(headDim) * 2 * BytesPerElement(kvType)
+		b.KVPerToken = uint64(perTokenSlot*float64(parallel) + 0.5)
 		b.KV = b.KVPerToken * uint64(ctx)
 		b.KVKnown = true
 	}
@@ -118,8 +160,12 @@ func (b *Budget) Summary() string {
 	if b.KVKnown {
 		kv = hardware.HumanBytes(b.KV)
 	}
-	return fmt.Sprintf("needs %s (weights %s + KV %s + overhead %s), free %s",
-		hardware.HumanBytes(b.Total), hardware.HumanBytes(b.Weights), kv,
+	slots := ""
+	if b.Parallel > 1 {
+		slots = fmt.Sprintf(" x%d slots", b.Parallel)
+	}
+	return fmt.Sprintf("needs %s (weights %s + KV %s%s + overhead %s), free %s",
+		hardware.HumanBytes(b.Total), hardware.HumanBytes(b.Weights), kv, slots,
 		hardware.HumanBytes(b.Overhead), hardware.HumanBytes(b.Free))
 }
 
@@ -134,7 +180,7 @@ func (b *Budget) Suggestion(flag string) string {
 	}
 	if b.KVKnown {
 		if flag == "ctx_size" {
-			return fmt.Sprintf("free VRAM or lower the context: set ctx_size = %d in maio.conf, then restart the service", b.MaxContext)
+			return fmt.Sprintf("free VRAM, lower ctx_size to %d, or use kv_type = \"q8_0\"/parallel = 1 in maio.conf", b.MaxContext)
 		}
 		return fmt.Sprintf("free VRAM or lower the context: %s %d (or --force to skip the check)", flag, b.MaxContext)
 	}
