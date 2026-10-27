@@ -3,6 +3,26 @@
 All notable changes are recorded here. Versions follow the project roadmap
 (`v1.0`, `v2.0`, `v3.0`, ...).
 
+## v3.1.0 — 2026-10-27
+
+### Changed
+
+- **User scope is now the default.** Plain `maio ...` reads the per-user config
+  (`~/.config/maio/maio.conf`), uses the per-user state directory and controls the
+  `systemd --user` unit. This is true even when the command runs as root.
+- **System scope is explicit and root-only:** `sudo maio --system ...` reads
+  `/etc/maio/maio.conf`, uses `/var/lib/maio` and controls the system unit.
+- Both scopes coexist: separate ports, models, keys, services and audit logs. A machine
+  may run a user service on 11434 and a system service on another port (or vice versa).
+- Generated systemd units now pass the scope explicitly:
+  `ExecStart=... --system serve` for system units and `... --user serve` for user units.
+- `maio boot`, `maio service`, `maio restart`, `maio status`, `maio config`, `maio token`,
+  `maio doctor` and `maio logs` all honour the selected scope.
+- The source installer enables the system unit with `sudo maio --system boot 1`; the
+  Debian package keeps its hardened system unit.
+- Help text, README and verification notes explain the default-user / explicit-system
+  split.
+
 ## v3.0.0 — 2026-10-27
 
 ### Added

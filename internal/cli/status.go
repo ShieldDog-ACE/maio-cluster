@@ -93,46 +93,42 @@ func fetchStats(conf *config.Global, timeout time.Duration) (*apiStats, error) {
 	return &st, nil
 }
 
-func serviceMode(conf *config.Global, forceUser bool) (systemd.Mode, bool) {
-	if forceUser {
-		st := systemd.Query(systemd.User)
-		return systemd.User, st.Exists || st.Enabled || st.Active
+func bootHint(conf *config.Global) string {
+	if conf.Scope == "system" {
+		return "sudo maio --system boot 1"
 	}
-	sys := systemd.Query(systemd.System)
-	if sys.Exists || sys.Enabled || sys.Active {
-		return systemd.System, true
+	return "maio boot 1"
+}
+
+func serviceMode(conf *config.Global) (systemd.Mode, bool) {
+	if conf.Scope == "system" {
+		st := systemd.Query(systemd.System)
+		return systemd.System, st.Exists || st.Enabled || st.Active
 	}
-	usr := systemd.Query(systemd.User)
-	if usr.Exists || usr.Enabled || usr.Active {
-		return systemd.User, true
-	}
-	return systemd.System, false
+	st := systemd.Query(systemd.User)
+	return systemd.User, st.Exists || st.Enabled || st.Active
 }
 
 func cmdStatus(conf *config.Global, args []string) int {
 	asJSON := false
-	userMode := false
 	for _, a := range args {
 		switch a {
 		case "-h", "--help":
-			fmt.Println("usage: maio status [--json] [--user]")
+			fmt.Println("usage: maio status [--json]                 user service (default)")
+			fmt.Println("       sudo maio --system status [--json]    system service")
 			return 0
 		case "--json":
 			asJSON = true
-		case "--user":
-			userMode = true
 		default:
 			return usagef("unknown argument %s", a)
 		}
 	}
-	mode, installed := serviceMode(conf, userMode)
-	var sysSt, userSt systemd.Status
+	mode, installed := serviceMode(conf)
+	var selected systemd.Status
 	if mode == systemd.System {
-		sysSt = systemd.Query(systemd.System)
-		userSt = systemd.Status{Mode: systemd.User, Unit: "maio"}
+		selected = systemd.Query(systemd.System)
 	} else {
-		userSt = systemd.Query(systemd.User)
-		sysSt = systemd.Status{Mode: systemd.System, Unit: "maio"}
+		selected = systemd.Query(systemd.User)
 	}
 	stats, statsErr := fetchStats(conf, 3*time.Second)
 
@@ -141,9 +137,9 @@ func cmdStatus(conf *config.Global, args []string) int {
 		"version":      Version,
 		"service_mode": string(mode),
 		"installed":    installed,
+		"scope":        string(mode),
 		"systemd": map[string]any{
-			"system": map[string]any{"exists": sysSt.Exists, "enabled": sysSt.Enabled, "active": sysSt.Active},
-			"user":   map[string]any{"exists": userSt.Exists, "enabled": userSt.Enabled, "active": userSt.Active},
+			"exists": selected.Exists, "enabled": selected.Enabled, "active": selected.Active,
 		},
 		"reachable": reachable,
 		"endpoint":  newAPIClient(conf).label,
@@ -162,12 +158,8 @@ func cmdStatus(conf *config.Global, args []string) int {
 	}
 
 	fmt.Printf("maio %s\n", Version)
-	state := "inactive"
-	if mode == systemd.System {
-		state = serviceState(sysSt)
-	} else {
-		state = serviceState(userSt)
-	}
+	state := serviceState(selected)
+	fmt.Printf("  scope     : %s (default is user; --system selects /etc/maio)\n", mode)
 	fmt.Printf("  service   : %s (%s service, installed=%v)\n", state, mode, installed)
 	if reachable {
 		fmt.Printf("  health    : ok at %s\n", newAPIClient(conf).label)
@@ -187,6 +179,13 @@ func cmdStatus(conf *config.Global, args []string) int {
 		if errors.As(statsErr, &ae) && ae.Status == 401 {
 			fmt.Printf("  health    : unauthorized (the service is up, but the key was rejected)\n")
 			fmt.Printf("  hint      : read the key with: maio token --show\n")
+		} else if errors.As(statsErr, &ae) && ae.Status == 404 {
+			restart := "maio restart"
+			if conf.Scope == "system" {
+				restart = "sudo maio --system restart"
+			}
+			fmt.Printf("  health    : the running service is older and has no /api/stats\n")
+			fmt.Printf("  hint      : install 3.1.0, then: %s\n", restart)
 		} else {
 			fmt.Printf("  health    : unreachable (%v)\n", statsErr)
 			fmt.Printf("  hint      : start it with: maio service start\n")
@@ -263,16 +262,14 @@ func cmdStats(conf *config.Global, args []string) int {
 
 func cmdService(conf *config.Global, args []string) int {
 	action := ""
-	userMode := false
 	tail := 100
 	var rest []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-h", "--help":
-			fmt.Println("usage: maio service <start|stop|restart|status|enable|disable|logs> [--user] [--tail N]")
+			fmt.Println("usage: maio service <start|stop|restart|status|enable|disable|logs> [--tail N]")
+			fmt.Println("       sudo maio --system service <action>     system service")
 			return 0
-		case "--user":
-			userMode = true
 		case "--tail":
 			if i+1 >= len(args) {
 				return usagef("--tail requires a number")
@@ -295,23 +292,15 @@ func cmdService(conf *config.Global, args []string) int {
 	}
 	action = rest[0]
 	if action == "enable" {
-		flag := []string{"1"}
-		if userMode {
-			flag = append(flag, "--user")
-		}
-		return cmdBoot(conf, flag)
+		return cmdBoot(conf, []string{"1"})
 	}
 	if action == "disable" {
-		flag := []string{"0"}
-		if userMode {
-			flag = append(flag, "--user")
-		}
-		return cmdBoot(conf, flag)
+		return cmdBoot(conf, []string{"0"})
 	}
-	mode, installed := serviceMode(conf, userMode)
+	mode, installed := serviceMode(conf)
 	if !installed {
 		return fail(errs.New(errs.Service, "maio is not installed as a service").
-			WithHint("enable it with: sudo maio boot 1 (or: maio boot 1 --user)"))
+			WithHint("enable it with: %s", bootHint(conf)))
 	}
 	switch action {
 	case "status":
@@ -345,22 +334,20 @@ func cmdService(conf *config.Global, args []string) int {
 }
 
 func cmdRestart(conf *config.Global, args []string) int {
-	userMode := false
 	for _, a := range args {
 		switch a {
 		case "-h", "--help":
-			fmt.Println("usage: maio restart [--user]")
+			fmt.Println("usage: maio restart                       user service (default)")
+			fmt.Println("       sudo maio --system restart        system service")
 			return 0
-		case "--user":
-			userMode = true
 		default:
 			return usagef("unknown argument %s", a)
 		}
 	}
-	mode, installed := serviceMode(conf, userMode)
+	mode, installed := serviceMode(conf)
 	if !installed {
 		return fail(errs.New(errs.Service, "maio is not installed as a service").
-			WithHint("enable it with: sudo maio boot 1 (or: maio boot 1 --user)"))
+			WithHint("enable it with: %s", bootHint(conf)))
 	}
 	if err := systemd.Control(mode, "restart"); err != nil {
 		return fail(err)

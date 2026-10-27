@@ -18,6 +18,6 @@
 
 升级原则：每个版本只加该版本必须包含的能力；不提升稳定性、安全性、速度的更新一律不做。
 
-V3 已打 tag `v3.0.0`。验证记录见
+V3 已打 tag `v3.1.0`（v3.0.0 是首个服务器级版本）。验证记录见
 [`docs/V3-VERIFICATION.zh-CN.md`](V3-VERIFICATION.zh-CN.md)；24 小时压测命令为
 `DURATION=86400 CONCURRENCY=128 make soak`。

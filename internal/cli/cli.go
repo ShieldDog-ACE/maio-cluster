@@ -44,10 +44,16 @@ import (
 )
 
 // Version can be overridden at build time with -ldflags.
-var Version = "3.0.0-dev"
+var Version = "3.1.0-dev"
 
-// Run is the entry point and returns the exit code.
+// Run is the entry point and returns the exit code. User scope is the default;
+// --system is an explicit, root-only opt-in.
 func Run(args []string) int {
+	scope, args, err := extractScope(args)
+	if err != nil {
+		errs.Print(os.Stderr, err)
+		return errs.ExitCode(err)
+	}
 	if len(args) == 0 {
 		printHelp()
 		return 2
@@ -58,30 +64,33 @@ func Run(args []string) int {
 		return 0
 	case "help":
 		if len(args) > 1 {
-			return Run(append([]string{args[1]}, "-h"))
+			return Run([]string{args[1], "-h"})
 		}
 		printHelp()
 		return 0
-	case "version", "--version", "-v":
-		return cmdVersion(args[1:])
 	case "sudo":
 		err := errs.New(errs.Usage, `"maio sudo" is no longer supported`).
-			WithHint("use \"sudo maio %s\" instead", strings.Join(args[1:], " "))
+			WithHint("use \"sudo maio --system %s\" for system scope, or \"maio %s\" for user scope",
+				strings.Join(args[1:], " "), strings.Join(args[1:], " "))
 		errs.Print(os.Stderr, err)
 		return errs.ExitCode(err)
 	}
-	conf, err := config.LoadGlobal()
+	conf, err := config.LoadGlobalMode(scope)
 	if err != nil {
 		errs.Print(os.Stderr, err)
 		return errs.ExitCode(err)
 	}
-	logging.InitOwned(conf.RuntimeDir, conf.RunAs)
+	logRunAs := conf.RunAs
+	if conf.Scope != "system" {
+		logRunAs = ""
+	}
+	logging.InitOwned(conf.RuntimeDir, logRunAs)
 	ensureStateOwnership(conf)
 	defer logging.Close()
 	start := time.Now()
-	logging.Info("cli.start", "command", args[0], "args", sanitizeArgs(args[1:]))
+	logging.Info("cli.start", "command", args[0], "scope", scope, "args", sanitizeArgs(args[1:]))
 	code := dispatch(conf, args)
-	logging.Info("cli.end", "command", args[0], "exit", code, "duration_ms", time.Since(start).Milliseconds())
+	logging.Info("cli.end", "command", args[0], "scope", scope, "exit", code, "duration_ms", time.Since(start).Milliseconds())
 	return code
 }
 
@@ -132,8 +141,8 @@ func dispatch(conf *config.Global, args []string) int {
 		return cmdDoctor(conf, rest)
 	case "logs", "log":
 		return cmdLogs(conf, rest)
-	case "version", "--version":
-		return cmdVersion(rest)
+	case "version", "--version", "-v":
+		return cmdVersion(conf, rest)
 	default:
 		err := errs.Newf(errs.Usage, "unknown command %q", cmd).
 			WithHint("run \"maio --help\" to see all commands")
@@ -160,8 +169,9 @@ func cmdInstall(conf *config.Global, args []string) int {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-h", "--help":
-			fmt.Println("usage: sudo maio install <name> [download-root] [--url URL|PATH] [--sha256 HEX]")
-			fmt.Println("       maio install <name> ~/models --url ./model.gguf   (user-owned root, no sudo)")
+			fmt.Println("usage: maio install <name> [download-root] [--url URL|PATH] [--sha256 HEX]")
+			fmt.Println("       sudo maio --system install <name> /var/lib/maio/models --url ...")
+			fmt.Println("       maio install <name> ~/models --url ./model.gguf   (user-owned root)")
 			return 0
 		case "--url":
 			if i+1 >= len(args) {
@@ -183,7 +193,7 @@ func cmdInstall(conf *config.Global, args []string) int {
 		}
 	}
 	if len(pos) == 0 {
-		return usagef("missing model name, e.g. sudo maio install deepseek-v4.1 /data/models")
+		return usagef("missing model name, e.g. maio install deepseek-v4.1 ~/models")
 	}
 	if len(pos) > 2 {
 		return usagef("too many arguments")
@@ -204,7 +214,7 @@ func cmdInstall(conf *config.Global, args []string) int {
 	}
 	if root == "" || !filepath.IsAbs(root) {
 		return fail(errs.Newf(errs.Usage, "download root must be an absolute path: %q", root).
-			WithHint("example: sudo maio install %s /data/models", name))
+			WithHint("example: maio install %s ~/models  (system: sudo maio --system install %s /var/lib/maio/models)", name, name))
 	}
 	if err := ensureWritableRoot(root, name); err != nil {
 		return fail(err)
@@ -452,7 +462,7 @@ func ensureWritableRoot(root, name string) error {
 	}
 	if systemLike {
 		return errs.Newf(errs.Permission, "installing to %s requires root", root).
-			WithHint("use: sudo maio install %s %s", name, root)
+			WithHint("use: sudo maio --system install %s %s", name, root)
 	}
 	fmt.Fprintf(os.Stderr, "maio: note: %s is user-owned; writing as the current user\n", root)
 	return nil
@@ -752,7 +762,7 @@ func cmdRm(conf *config.Global, args []string) int {
 	if err := os.RemoveAll(md.Dir); err != nil {
 		logging.Error("uninstall.failed", err, "model", md.Name, "path", md.Dir)
 		return fail(errs.Wrap(errs.Permission, err, "cannot delete %s", md.Dir).
-			WithHint("check permissions, or run: sudo maio rm %s", md.Name))
+			WithHint("check permissions, or use the system scope: sudo maio --system rm %s", md.Name))
 	}
 	if filepath.IsAbs(md.Path) && !pathWithin(md.Dir, md.Path) {
 		fmt.Fprintf(os.Stderr, "maio: warning: the model file is outside the model directory and was not deleted: %s\n", md.Path)
@@ -972,6 +982,7 @@ func cmdServe(conf *config.Global, args []string) int {
 		case "-h", "--help":
 			fmt.Println("usage: maio serve [--host ADDR] [--port N] [--api-key KEY] [--no-auth]")
 			fmt.Println("       [--max-concurrency N] [--parallel N] [--memory-limit MB]")
+			fmt.Println("       sudo maio --system serve ...    use /etc/maio instead")
 			return 0
 		case "--host":
 			if i+1 >= len(args) {
@@ -1053,13 +1064,17 @@ func cmdServe(conf *config.Global, args []string) int {
 			"nofile_soft", info.NoFileSoft, "nofile_hard", info.NoFileHard)
 	}
 
-	owner.ChownMode(conf.LockFile(), conf.RunAs, 0o644)
+	if conf.Scope == "system" {
+		owner.ChownMode(conf.LockFile(), conf.RunAs, 0o644)
+	}
 	lock, err := lockfile.Acquire(conf.LockFile())
 	if err != nil {
 		return fail(errs.New(errs.Conflict, err.Error()).
 			WithHint("stop the other instance with: maio service stop; or remove the stale lock only after checking ps"))
 	}
-	owner.ChownMode(lock.Path(), conf.RunAs, 0o644)
+	if conf.Scope == "system" {
+		owner.ChownMode(lock.Path(), conf.RunAs, 0o644)
+	}
 	defer lock.Release()
 
 	srv, err := server.New(conf, engine.New(conf), Version)
@@ -1067,14 +1082,16 @@ func cmdServe(conf *config.Global, args []string) int {
 		return fail(err)
 	}
 	// server.New may have generated the key after the earlier ownership pass.
-	owner.ChownMode(conf.AuthKeyFile(), conf.RunAs, 0o600)
-	owner.ChownMode(filepath.Dir(conf.AuthKeyFile()), conf.RunAs, 0o700)
+	if conf.Scope == "system" {
+		owner.ChownMode(conf.AuthKeyFile(), conf.RunAs, 0o600)
+		owner.ChownMode(filepath.Dir(conf.AuthKeyFile()), conf.RunAs, 0o700)
+	}
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		if port < 1024 && os.Geteuid() != 0 {
 			return fail(errs.Wrap(errs.Permission, err, "cannot listen on %s", addr).
-				WithHint("ports below 1024 require root: sudo maio serve --port %d", port))
+				WithHint("ports below 1024 require root: sudo maio --system serve --port %d", port))
 		}
 		return fail(errs.Wrap(errs.Service, err, "cannot listen on %s", addr).
 			WithHint("the port may be in use; check with: ss -ltnp, or choose another --port"))
@@ -1111,6 +1128,7 @@ func cmdServe(conf *config.Global, args []string) int {
 		scheme = "https"
 	}
 	fmt.Printf("maio %s service started at %s://%s (pid %d)\n", Version, scheme, addr, os.Getpid())
+	fmt.Printf("  scope           : %s (%s)\n", conf.Scope, conf.Source)
 	fmt.Printf("  auth            : %s\n", authSummary(ai))
 	if ai.Required && (ai.Source == "file" || ai.Generated) && ai.KeyFile != "" {
 		fmt.Printf("  key file        : %s (show with: maio token --show)\n", ai.KeyFile)
@@ -1121,7 +1139,7 @@ func cmdServe(conf *config.Global, args []string) int {
 		fmt.Printf("  new API key     : generated in %s; read it with: maio token --show\n", ai.KeyFile)
 	}
 	logging.Info("serve.start", "addr", addr, "pid", os.Getpid(), "version", Version,
-		"models_root", conf.ModelsRoot, "auth_required", ai.Required, "auth_source", ai.Source,
+		"scope", conf.Scope, "models_root", conf.ModelsRoot, "auth_required", ai.Required, "auth_source", ai.Source,
 		"max_concurrency", conf.MaxConcurrency, "max_queue", conf.MaxQueue,
 		"parallel", conf.Parallel, "kv_type", conf.KVType, "memory_limit_mb", conf.MemoryLimitMB)
 	_ = sd.Status(fmt.Sprintf("serving on %s", addr))
@@ -1330,18 +1348,16 @@ func cmdStop(conf *config.Global, args []string) int {
 
 func cmdBoot(conf *config.Global, args []string) int {
 	dry := false
-	userMode := false
 	value := ""
 	for _, a := range args {
 		switch {
 		case a == "-h" || a == "--help":
-			fmt.Println("usage: sudo maio boot 1|0 [--user] [--dry-run]")
+			fmt.Println("usage: maio boot 1|0 [--dry-run]                 user service (default)")
+			fmt.Println("       sudo maio --system boot 1|0 [--dry-run]    system service")
 			fmt.Println("  1 = start on boot, 0 = manual start")
 			return 0
 		case a == "--dry-run":
 			dry = true
-		case a == "--user":
-			userMode = true
 		case strings.HasPrefix(a, "-"):
 			return usagef("unknown argument %s", a)
 		default:
@@ -1352,11 +1368,13 @@ func cmdBoot(conf *config.Global, args []string) int {
 		}
 	}
 	if value != "1" && value != "0" {
-		return usagef("usage: sudo maio boot 1|0 (1=start on boot, 0=manual start)")
+		return usagef("usage: maio boot 1|0 (1=start on boot, 0=manual start)")
 	}
-	mode := systemd.System
-	if userMode {
-		mode = systemd.User
+	mode := systemd.User
+	scopeHint := "maio"
+	if conf.Scope == "system" {
+		mode = systemd.System
+		scopeHint = "sudo maio --system"
 	}
 	boot := 0
 	if value == "1" {
@@ -1364,10 +1382,7 @@ func cmdBoot(conf *config.Global, args []string) int {
 	}
 	confPath := conf.Source
 	if confPath == "" {
-		confPath = config.ConfPath()
-	}
-	if userMode && confPath != config.UserConfPath() {
-		confPath = config.UserConfPath()
+		confPath = config.ConfPathFor(conf.Scope)
 	}
 	exe := installedExe()
 	unitPath := systemd.UnitPath(mode)
@@ -1380,26 +1395,19 @@ func cmdBoot(conf *config.Global, args []string) int {
 		if flag != "" {
 			flag += " "
 		}
-		fmt.Printf("will set boot = %d\n  config: %s\n  unit: %s\n  run: systemctl %s%s\n",
-			boot, confPath, unitPath, flag, action)
+		fmt.Printf("will set boot = %d\n  scope: %s\n  config: %s\n  unit: %s\n  run: systemctl %s%s\n",
+			boot, conf.Scope, confPath, unitPath, flag, action)
 		return 0
 	}
-	if !userMode && os.Geteuid() != 0 {
+	if mode == systemd.System && os.Geteuid() != 0 {
 		return fail(errs.New(errs.Permission, "the system service requires root").
-			WithHint("use: sudo maio boot %s  (or: maio boot %s --user for a per-user service)", value, value))
+			WithHint("use: sudo maio --system boot %s", value))
 	}
 	conf.Boot = boot
-	var err error
-	if userMode {
-		conf.Source = confPath
-		err = conf.SaveTo(confPath)
-	} else {
-		err = conf.Save()
-	}
-	if err != nil {
+	if err := conf.SaveTo(confPath); err != nil {
 		return fail(err)
 	}
-	logging.Info("boot.save", "boot", boot, "config", confPath, "mode", string(mode))
+	logging.Info("boot.save", "boot", boot, "config", confPath, "mode", string(mode), "scope", conf.Scope)
 	if boot == 1 {
 		if err := systemd.EnableOpts(systemd.Options{
 			Mode: mode, Exe: exe, ConfPath: confPath,
@@ -1416,7 +1424,7 @@ func cmdBoot(conf *config.Global, args []string) int {
 		}
 		fmt.Printf("start on boot enabled (%s service, active=%v, enabled=%v)\n", mode, st.Active, st.Enabled)
 		logging.Info("boot.enable", "mode", string(mode), "unit", unitPath, "exe", exe)
-		if userMode {
+		if mode == systemd.User {
 			user := currentUser()
 			if ok, _ := systemd.Linger(user); !ok {
 				fmt.Fprintf(os.Stderr, "maio: note: the per-user service starts after login; for boot-time start run:\n  %s\n", systemd.LingerHint(user))
@@ -1429,6 +1437,7 @@ func cmdBoot(conf *config.Global, args []string) int {
 	}
 	fmt.Printf("start on boot disabled (%s service)\n", mode)
 	logging.Info("boot.disable", "mode", string(mode), "unit", unitPath)
+	fmt.Printf("next: enable it again with: %s boot 1\n", scopeHint)
 	return 0
 }
 
@@ -1563,7 +1572,7 @@ func boolYes(v bool) string {
 // running as conf.RunAs. It only touches maio's own state files; model data is
 // left alone.
 func ensureStateOwnership(conf *config.Global) {
-	if os.Geteuid() != 0 || conf.RunAs == "" {
+	if conf.Scope != "system" || os.Geteuid() != 0 || conf.RunAs == "" {
 		return
 	}
 	// Never take ownership of a per-user state directory under /home.
@@ -1601,9 +1610,12 @@ func ensureStateOwnership(conf *config.Global) {
 func printHelp() {
 	fmt.Print(`maio - Linux-only, server-grade llama.cpp model service
 
+Default scope: user (config ~/.config/maio, user service).
+System scope is explicit: sudo maio --system <command>
+
 Usage:
   maio <command> [arguments]
-  sudo maio <command> [arguments]    for system-wide changes
+  sudo maio --system <command> [arguments]    system-wide /etc/maio scope
 
 Models:
   maio pull|install <name> [root] [--url URL|PATH] [--sha256 HEX]
@@ -1621,19 +1633,22 @@ Service:
   maio ps [--json]                          list loaded models
   maio load <name>                          load and pin a model (restored on restart)
   maio stop <name> | --all                  unload model(s) and free VRAM
-  maio status [--json] [--user]             service + health + memory + auth
+  maio status [--json]                      service + health + memory + auth
   maio stats [--json]                       live metrics and per-model state
-  maio service <start|stop|restart|status|enable|disable|logs> [--user]
-                                            control the systemd service
-  maio restart [--user]                     restart the systemd service
-  sudo maio boot 1|0 [--user]               start-on-boot switch (default 1)
+  maio service <start|stop|restart|status|enable|disable|logs>
+                                            control the user service
+  maio restart                              restart the user service
+  maio boot 1|0                             user start-on-boot switch (default 1)
+  sudo maio --system service <action>       control the system service
+  sudo maio --system boot 1|0               system start-on-boot switch
 
 Security and configuration:
   maio token [show] [--show] [--json]       show the API key (masked by default)
   maio token rotate|set|clear               manage the API key
   maio config [show] [--json]               show effective configuration
   maio config path|get|set|edit|keys        inspect or edit maio.conf
-  maio doctor [--json]                      check config, hardware, engine, service
+  maio doctor [--json]                      check user config, hardware, engine, service
+                                            (add --system for /etc/maio)
   maio logs [--tail N] [--json] [--path]    read the audit log
   maio version [--json]                     print version, paths and API mode
   maio completion bash|zsh|fish             generate shell completion
@@ -1657,9 +1672,14 @@ Exit codes:
   7 verification, 8 engine, 9 hardware, 10 config, 11 service,
   12 unauthorized, 13 rate limited, 14 busy, 15 timeout, 130 interrupted
 
+Scope:
+  - plain "maio ..." always uses the user scope, even under sudo
+  - "sudo maio --system ..." uses /etc/maio, /var/lib/maio and the system unit
+  - the two scopes can coexist; each has its own port/key/service
+
 Notes:
   - model names are lowercase; spaces become - (DeepSeek v4.1 -> deepseek-v4.1)
-  - use "sudo maio ...", not "maio sudo ..."
+  - use "sudo maio --system ...", not "maio sudo ..."
   - a non-loopback listener requires an API key unless allow_insecure = 1
   - the control plane targets < 200 MiB RSS; model memory is separate
 `)

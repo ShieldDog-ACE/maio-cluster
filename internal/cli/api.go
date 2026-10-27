@@ -41,6 +41,7 @@ type apiClient struct {
 	key   string
 	http  *http.Client
 	label string
+	scope string
 }
 
 func newAPIClient(conf *config.Global) *apiClient {
@@ -86,6 +87,7 @@ func newAPIClient(conf *config.Global) *apiClient {
 			},
 		},
 		label: base,
+		scope: conf.Scope,
 	}
 }
 
@@ -107,8 +109,12 @@ func (c *apiClient) do(ctx context.Context, method, path string, body io.Reader,
 		if ctx.Err() != nil {
 			return nil, errs.Wrap(errs.Timeout, ctx.Err(), "request to the maio service timed out")
 		}
+		hint := "start it with: maio service start"
+		if c.scope == "system" {
+			hint = "start it with: sudo maio --system service start"
+		}
 		return nil, errs.Wrap(errs.Service, err, "cannot reach the maio service at %s", c.base).
-			WithHint("start it with: maio service start  (or: sudo maio boot 1)")
+			WithHint("%s", hint)
 	}
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()

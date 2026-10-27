@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Build a Debian package for maio-cluster.
-# Usage: VERSION=3.0.0 ARCH=amd64 bash deploy/build-deb.sh
+# Usage: VERSION=3.1.0 ARCH=amd64 bash deploy/build-deb.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:-3.0.0}"
+VERSION="${VERSION:-3.1.0}"
 ARCH="${ARCH:-$(dpkg --print-architecture 2>/dev/null || echo amd64)}"
 OUT="$ROOT/dist"
 DEB="$OUT/maio-cluster_${VERSION}_${ARCH}.deb"

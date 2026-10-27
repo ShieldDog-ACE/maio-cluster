@@ -2,13 +2,13 @@
 # Package the minimal llama-server runtime produced by
 # scripts/build-llama-minimal.sh or scripts/bundle-llama.sh.
 #
-# Usage: VERSION=3.0.0 ARCH=amd64 bash deploy/build-llama-deb.sh
+# Usage: VERSION=3.1.0 ARCH=amd64 bash deploy/build-llama-deb.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:-3.0.0}"
+VERSION="${VERSION:-3.1.0}"
 ARCH="${ARCH:-$(dpkg --print-architecture 2>/dev/null || echo amd64)}"
 SRC="${LLAMA_RUNTIME:-$ROOT/dist/maio-llama}"
 OUT="$ROOT/dist"

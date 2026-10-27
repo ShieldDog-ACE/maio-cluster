@@ -16,6 +16,19 @@ GGUF models, runs local inference, and exposes both an **Ollama-compatible** and
 dependencies** and ships as a single binary. It targets **Linux x86-64 only** (tested on
 Ubuntu 26.04, Go 1.27, Tesla V100).
 
+## Two scopes: user by default
+
+| Scope | Command | Config / state | systemd |
+| --- | --- | --- | --- |
+| **User (default)** | `maio ...` | `~/.config/maio/maio.conf` / `~/.local/state/maio` | `systemd --user` |
+| **System (explicit)** | `sudo maio --system ...` | `/etc/maio/maio.conf` / `/var/lib/maio` | system `maio.service` |
+
+- Plain `maio ...` is **always user scope**, even as root, so it cannot accidentally
+  touch `/etc` or the system unit.
+- System scope is an explicit, root-only opt-in: `--system`.
+- Both scopes coexist with separate ports, model stores, API keys, audit logs and units.
+- `--user` is still accepted and equals the default.
+
 ## What V3 adds
 
 - **Concurrency and backpressure** — a global inference semaphore plus a bounded FIFO
@@ -62,12 +75,13 @@ Ubuntu 26.04, Go 1.27, Tesla V100).
 ## Build and test
 
 ```bash
-make build        # bin/maio (3.0.0 by default)
+make build        # bin/maio (3.1.0 by default)
 make test         # unit tests
 make race         # race detector
 make smoke        # end-to-end smoke test (no GPU, no root)
 make soak         # concurrency + 200 MiB RSS target (mock engine, no GPU)
 make verify       # vet + test + smoke
+make install-user # install to ~/.local/bin and enable the user service (no root)
 ```
 
 See [`docs/V3-VERIFICATION.md`](docs/V3-VERIFICATION.md) for the full V3 verification log.
@@ -85,7 +99,7 @@ One-off install:
 
 ```bash
 make deb
-sudo apt install ./dist/maio-cluster_3.0.0_amd64.deb
+sudo apt install ./dist/maio-cluster_3.1.0_amd64.deb
 ```
 
 The package:
@@ -95,24 +109,30 @@ The package:
 - installs the hardened systemd unit;
 - immediately runs `systemctl enable --now`.
 
-### Source checkout
+The package installs the **system** service. Day-to-day user commands still use
+`maio ...`; manage the system service with `sudo maio --system ...`. The two are
+independent.
+
+### Source checkout (system)
 
 ```bash
 make build
-sudo bash ./maio-cluster              # install and start on boot
+sudo bash ./maio-cluster              # install system service and start on boot
 sudo bash ./maio-cluster --no-start   # install only
 sudo bash ./maio-cluster --boot 0     # install, no start on boot
 ```
 
-### Rootless / per-user service
+### User-level install / service (default)
 
 ```bash
-maio boot 1 --user
+make build
+install -m 0755 bin/maio ~/.local/bin/maio
+maio boot 1                           # user scope by default
 sudo loginctl enable-linger "$USER"   # start without a login session
 ```
 
 The user service uses the user's own config and state directory and does not create the
-system `maio` account.
+system `maio` account. For the system service: `sudo maio --system boot 1`.
 
 ### Power-on start
 
@@ -120,10 +140,17 @@ system `maio` account.
 Two steps are required:
 
 1. enable **Restore on AC Power Loss / AC Back = Power On** in the BIOS/UEFI;
-2. keep `boot = 1` (the default) and check `systemctl is-enabled maio` → `enabled`.
+2. keep `boot = 1` (the default) and check the selected scope:
 
-After mains power returns the machine boots and systemd starts `maio.service`.
-`Restart=always` also covers an abnormal crash. Verify with `maio status`.
+```bash
+maio status                              # user
+sudo maio --system status                # system
+systemctl --user is-enabled maio         # user
+systemctl is-enabled maio                # system
+```
+
+After mains power returns the machine boots and systemd starts the corresponding unit.
+`Restart=always` also covers an abnormal crash.
 
 ## Lightweight llama.cpp (Linux x86-64)
 
@@ -159,7 +186,7 @@ Package it as a deb:
 
 ```bash
 make llama-bundle
-make deb-llama                # dist/maio-llama_3.0.0_amd64.deb -> /opt/maio/llama
+make deb-llama                # dist/maio-llama_3.1.0_amd64.deb -> /opt/maio/llama
 ```
 
 Then in `/etc/maio/maio.conf`:
@@ -171,9 +198,12 @@ llama_lib = "/opt/maio/llama/lib:/usr/local/cuda/lib64"
 
 ## Configuration
 
-Global config: `/etc/maio/maio.conf` (flat TOML, one per machine — **not** `maio.toml`).
-Without root, maio falls back to `~/.config/maio/maio.conf` and a user state directory.
-`MAIO_CONF` overrides.
+Config is flat TOML, one per scope (never `maio.toml`):
+
+- user (default): `~/.config/maio/maio.conf`, state `~/.local/state/maio`
+- system (`--system`): `/etc/maio/maio.conf`, state `/var/lib/maio`
+
+`MAIO_CONF` overrides the selected scope.
 
 ### Service and security
 
@@ -211,7 +241,7 @@ Without root, maio falls back to `~/.config/maio/maio.conf` and a user state dir
 | `max_procs` | GOMAXPROCS; `0` = all cores | `0` |
 | `max_open_files` | RLIMIT_NOFILE target | `1048576` |
 | `restore` | restore resident models on start | `1` |
-| `run_as` | systemd `User=`; the package uses `maio` | empty = root |
+| `run_as` | system scope systemd `User=`; the package uses `maio` | empty = root |
 
 Unknown keys, wrong types and invalid enums are reported with the exact line. `maio config`
 can show, validate and edit them.
@@ -227,8 +257,8 @@ path   = "models/Qwen3.5-9B-Q4_K_M.gguf"
 ## Commands
 
 ```text
-# models
-sudo maio pull|install <name> [root] [--url URL|PATH] [--sha256 HEX]
+# models (user scope; prefix with "sudo maio --system" for system scope)
+maio pull|install <name> [root] [--url URL|PATH] [--sha256 HEX]
 maio list [--wide] [--json]
 maio show <name> [--json]
 maio cp <source> <destination>
@@ -240,11 +270,18 @@ maio serve [--host ADDR] [--port N] [--api-key KEY] [--no-auth]
 maio ps [--json]
 maio load <name>                     # pin; restored after a restart
 maio stop <name> | --all
-maio status [--json] [--user]
+maio status [--json]
 maio stats [--json]
-maio service <start|stop|restart|status|enable|disable|logs> [--user]
-maio restart [--user]
-sudo maio boot 1|0 [--user]
+maio service <start|stop|restart|status|enable|disable|logs>
+maio restart
+maio boot 1|0
+
+# system scope (explicit, root only)
+sudo maio --system pull|install ...
+sudo maio --system status
+sudo maio --system service start|stop|restart|status
+sudo maio --system restart
+sudo maio --system boot 1|0
 
 # security and configuration
 maio token [show] [--show] [--json]
@@ -388,6 +425,7 @@ The generated unit contains:
 ```ini
 Type=notify
 NotifyAccess=main
+ExecStart=/usr/bin/maio --system serve    # user unit uses --user serve
 Restart=always
 WatchdogSec=30
 KillMode=mixed
@@ -423,6 +461,15 @@ maio service logs --tail 200
 maio logs --tail 50
 maio upgrade ./bin/maio     # atomic replace + backup + restart, auto-rollback on failure
 maio rollback
+
+# system scope equivalents
+sudo maio --system status
+sudo maio --system stats
+sudo maio --system doctor
+sudo maio --system service logs --tail 200
+sudo maio --system logs --tail 50
+sudo maio --system upgrade ./bin/maio
+sudo maio --system rollback
 ```
 
 Logs:

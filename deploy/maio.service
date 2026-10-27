@@ -9,9 +9,10 @@ StartLimitBurst=12
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/bin/maio serve
+ExecStart=/usr/bin/maio --system serve
 Environment=MAIO_CONF=/etc/maio/maio.conf
 Environment=HOME=/var/lib/maio
+Environment=MAIO_SYSTEM_SERVICE=1
 User=maio
 Group=maio
 SupplementaryGroups=video render

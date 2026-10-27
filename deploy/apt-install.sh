@@ -14,7 +14,7 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-VERSION="${VERSION:-3.0.0}"
+VERSION="${VERSION:-3.1.0}"
 ARCH="${ARCH:-$(dpkg --print-architecture 2>/dev/null || echo amd64)}"
 DEB="$ROOT/dist/maio-cluster_${VERSION}_${ARCH}.deb"
 
@@ -33,4 +33,4 @@ apt-get install -y maio-cluster
 
 echo
 echo "maio-cluster installed. Future installs can use: sudo apt install maio-cluster"
-echo "check: systemctl status maio && maio version"
+echo "check: systemctl status maio && sudo maio --system version"

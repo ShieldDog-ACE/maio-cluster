@@ -14,7 +14,7 @@ import (
 	"github.com/ShieldDog-ACE/maio-cluster/internal/logging"
 )
 
-func cmdVersion(args []string) int {
+func cmdVersion(conf *config.Global, args []string) int {
 	asJSON := false
 	for _, a := range args {
 		switch a {
@@ -27,19 +27,24 @@ func cmdVersion(args []string) int {
 			return usagef("unknown argument %s", a)
 		}
 	}
-	conf, err := config.LoadGlobal()
 	confErr := ""
-	if err != nil {
-		confErr = err.Error()
-		conf = config.DefaultGlobal()
+	if conf == nil {
+		var err error
+		conf, err = config.LoadGlobalMode("user")
+		if err != nil {
+			confErr = err.Error()
+			conf = config.DefaultGlobal()
+			conf.Scope = "user"
+		}
 	}
 	rec := map[string]any{
 		"version":         Version,
+		"scope":           conf.Scope,
 		"api":             "ollama+openai-compatible",
 		"go":              runtime.Version(),
 		"os":              runtime.GOOS,
 		"arch":            runtime.GOARCH,
-		"config":          config.ConfPath(),
+		"config":          conf.Source,
 		"models_root":     conf.ModelsRoot,
 		"runtime_dir":     conf.RuntimeDir,
 		"log":             conf.AuditLogPath(),
@@ -59,10 +64,10 @@ func cmdVersion(args []string) int {
 		_ = json.NewEncoder(os.Stdout).Encode(rec)
 		return 0
 	}
-	fmt.Printf("maio %s\n", Version)
+	fmt.Printf("maio %s (%s scope)\n", Version, conf.Scope)
 	fmt.Printf("  go          : %s\n", runtime.Version())
 	fmt.Printf("  platform    : %s/%s\n", runtime.GOOS, runtime.GOARCH)
-	fmt.Printf("  config      : %s\n", config.ConfPath())
+	fmt.Printf("  config      : %s\n", conf.Source)
 	fmt.Printf("  models_root : %s\n", conf.ModelsRoot)
 	fmt.Printf("  runtime_dir : %s\n", conf.RuntimeDir)
 	fmt.Printf("  audit log   : %s\n", conf.AuditLogPath())
@@ -84,6 +89,7 @@ func cmdLogs(conf *config.Global, args []string) int {
 		switch args[i] {
 		case "-h", "--help":
 			fmt.Println("usage: maio logs [--tail N] [--json] [--path]")
+			fmt.Println("       sudo maio --system logs ...    system audit log")
 			return 0
 		case "--json":
 			asJSON = true

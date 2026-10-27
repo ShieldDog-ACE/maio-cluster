@@ -9,7 +9,7 @@ import (
 func TestUnitFileSystem(t *testing.T) {
 	u := UnitFile(System, "/usr/bin/maio", "/etc/maio/maio.conf")
 	for _, want := range []string{
-		"ExecStart=/usr/bin/maio serve",
+		"ExecStart=/usr/bin/maio --system serve",
 		"Environment=MAIO_CONF=/etc/maio/maio.conf",
 		"WantedBy=multi-user.target",
 		"Type=notify",
@@ -79,3 +79,18 @@ func TestUserUnitDoesNotSwitchUser(t *testing.T) {
 		t.Fatalf("user unit must not set User=/Group=:\n%s", u)
 	}
 }
+
+func TestUnitPassesScope(t *testing.T) {
+	base := Options{Exe: "/usr/bin/maio", ConfPath: "/etc/maio/maio.conf",
+		StateDir: "/var/lib/maio", ModelsRoot: "/var/lib/maio/models"}
+	sys := UnitFileOpts(withMode(base, System))
+	if !strings.Contains(sys, "ExecStart=/usr/bin/maio --system serve") {
+		t.Fatalf("system unit lacks --system:\n%s", sys)
+	}
+	usr := UnitFileOpts(withMode(base, User))
+	if !strings.Contains(usr, "ExecStart=/usr/bin/maio --user serve") {
+		t.Fatalf("user unit lacks --user:\n%s", usr)
+	}
+}
+
+func withMode(o Options, m Mode) Options { o.Mode = m; return o }

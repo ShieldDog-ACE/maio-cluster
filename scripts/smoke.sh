@@ -144,8 +144,8 @@ echo "== 6. permission policy (non-root install to a system path must fail) =="
 if [ "$(id -u)" -ne 0 ]; then
   expect_exit 5 "$BIN" install perm-test /var/lib/maio/models --url "http://127.0.0.1:$HTTP_PORT/tiny.gguf"
   grep -q "requires root" "$TMP/err.log" || fail "missing permission hint"
-  grep -q "sudo maio install" "$TMP/err.log" || fail "permission hint does not mention sudo maio"
-  pass "non-root install points at sudo maio install"
+  grep -q "sudo maio --system install" "$TMP/err.log" || fail "permission hint does not mention sudo maio --system"
+  pass "non-root install points at sudo maio --system install"
 else
   pass "running as root; permission test skipped"
 fi
@@ -165,7 +165,7 @@ for _ in $(seq 1 50); do
   sleep 0.2
 done
 curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$API_PORT/api/tags" | grep -q 401 || fail "missing 401 for an unauthenticated request"
-curl -s -H "Authorization: Bearer $KEY" "http://127.0.0.1:$API_PORT/api/version" | grep -q "3.0.0" || fail "/api/version"
+curl -s -H "Authorization: Bearer $KEY" "http://127.0.0.1:$API_PORT/api/version" | grep -q "3.1.0" || fail "/api/version"
 curl -s -H "Authorization: Bearer $KEY" "http://127.0.0.1:$API_PORT/api/tags" | grep -q "copy-model" || fail "/api/tags"
 curl -s -H "Authorization: Bearer $KEY" "http://127.0.0.1:$API_PORT/api/tags" | grep -q "keep-model" || fail "/api/tags missing keep-model"
 curl -s "http://127.0.0.1:$API_PORT/healthz" | grep -q '"ok"' || fail "/healthz"
@@ -194,7 +194,7 @@ pass "doctor --json reports hardware, engine, models and logs"
 python3 - "$TMP/version.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
-assert d["version"].startswith("3.0.0"), d
+assert d["version"].startswith("3.1.0"), d
 assert d["models_root"], d
 PY
 "$BIN" logs --path | grep "maio.log" >/dev/null || fail "logs --path"
@@ -222,7 +222,7 @@ echo "== 11. V3 CLI surface =="
 "$BIN" token | grep -q '\*' || fail "token masking"
 "$BIN" completion bash | grep -q '_maio' || fail "bash completion"
 "$BIN" status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["reachable"] is True, d'
-"$BIN" stats --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["metrics"]["version"].startswith("3.0.0"), d'
+"$BIN" stats --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["metrics"]["version"].startswith("3.1.0"), d'
 "$BIN" ps --json | python3 -c 'import json,sys; assert isinstance(json.load(sys.stdin), list)'
 pass "config / token / completion / status / stats / ps"
 

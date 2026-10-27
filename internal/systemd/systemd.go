@@ -100,7 +100,11 @@ func UnitFileOpts(o Options) string {
 	}
 	b.WriteString("Type=notify\n")
 	b.WriteString("NotifyAccess=main\n")
-	fmt.Fprintf(&b, "ExecStart=%s serve\n", systemdArg(o.Exe))
+	execArgs := "--user serve"
+	if mode == System {
+		execArgs = "--system serve"
+	}
+	fmt.Fprintf(&b, "ExecStart=%s %s\n", systemdArg(o.Exe), execArgs)
 	fmt.Fprintf(&b, "Environment=MAIO_CONF=%s\n", systemdArg(o.ConfPath))
 	b.WriteString("Restart=always\n")
 	b.WriteString("RestartSec=2\n")
@@ -114,6 +118,9 @@ func UnitFileOpts(o Options) string {
 	b.WriteString("LimitNPROC=8192\n")
 	b.WriteString("TasksMax=8192\n")
 	fmt.Fprintf(&b, "Environment=HOME=%s\n", systemdArg(stateDir))
+	if mode == System {
+		b.WriteString("Environment=MAIO_SYSTEM_SERVICE=1\n")
+	}
 	// User units run under the user manager and cannot switch User=/Group=.
 	if mode == System && o.RunAs != "" {
 		fmt.Fprintf(&b, "User=%s\n", systemdArg(o.RunAs))

@@ -19,6 +19,6 @@ Every milestone is committed and tagged (`v1.0`, `v2.0`, ...) before the next on
 Upgrade rule: each version only adds what it must include. An update that does not improve stability,
 security or speed is not made.
 
-V3 is tagged `v3.0.0`. The verification log is in
+V3 is tagged `v3.1.0` (v3.0.0 was the first server-grade release). The verification log is in
 [`docs/V3-VERIFICATION.md`](V3-VERIFICATION.md); the 24h soak command is
 `DURATION=86400 CONCURRENCY=128 make soak`.

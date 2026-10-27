@@ -756,7 +756,7 @@ func (m *Manager) openEngineLog(path string) (*os.File, error) {
 		_ = os.Rename(path, path+".1")
 	}
 	runAs := m.Conf.RunAs
-	if strings.HasPrefix(path, "/home/") {
+	if m.Conf.Scope != "system" || strings.HasPrefix(path, "/home/") {
 		runAs = ""
 	}
 	owner.ChownMode(path, runAs, 0o640)

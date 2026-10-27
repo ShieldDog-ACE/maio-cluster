@@ -13,6 +13,7 @@ import (
 	"github.com/ShieldDog-ACE/maio-cluster/internal/auth"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/errs"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/naming"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/owner"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/toml"
 )
 
@@ -79,6 +80,8 @@ type Global struct {
 	RuntimeDir string
 	// Source is the file this config was loaded from ("" when defaults).
 	Source string
+	// Scope is "user" or "system"; it selects the config/state/service set.
+	Scope string
 }
 
 // DefaultGlobal returns the built-in defaults. Start-on-boot is on by default.
@@ -110,6 +113,15 @@ func DefaultGlobal() *Global {
 		MaxOpenFiles:   1048576,
 		Restore:        1,
 	}
+}
+
+// userDefaults gives a user-scope config writable, self-contained paths.
+func userDefaults() (modelsRoot, stateDir string) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return filepath.Join(os.TempDir(), "maio-models"), filepath.Join(os.TempDir(), "maio-state")
+	}
+	return filepath.Join(home, "AI"), filepath.Join(home, ".local", "state", "maio")
 }
 
 // UserConfPath returns the per-user config path.
@@ -154,6 +166,22 @@ func ConfPath() string {
 	return system
 }
 
+// ConfPathFor returns the config path for an explicit scope. MAIO_CONF always
+// wins so tests and unusual layouts can override both scopes.
+func ConfPathFor(scope string) string {
+	if p := os.Getenv("MAIO_CONF"); p != "" {
+		return p
+	}
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "system":
+		return systemConfPath
+	case "user":
+		return UserConfPath()
+	default:
+		return ConfPath()
+	}
+}
+
 // IndexPath returns the model index path (same directory as the global config).
 func IndexPath() string {
 	return filepath.Join(filepath.Dir(ConfPath()), "index.toml")
@@ -164,11 +192,31 @@ func UserIndexPath() string {
 	return filepath.Join(filepath.Dir(UserConfPath()), "index.toml")
 }
 
-// LoadGlobal reads the global config; a missing file means defaults.
-func LoadGlobal() (*Global, error) {
+// LoadGlobal reads the config using the legacy root/user auto-detection.
+func LoadGlobal() (*Global, error) { return LoadGlobalMode("auto") }
+
+// LoadGlobalMode reads the user or system config explicitly. A missing file
+// means built-in defaults for that scope.
+func LoadGlobalMode(scope string) (*Global, error) {
 	g := DefaultGlobal()
-	p := ConfPath()
+	p := ConfPathFor(scope)
 	g.Source = p
+	requested := strings.ToLower(strings.TrimSpace(scope))
+	switch requested {
+	case "system":
+		g.Scope = "system"
+	case "user":
+		g.Scope = "user"
+		g.ModelsRoot, g.StateDir = userDefaults()
+		g.RunAs = ""
+	default:
+		// Legacy auto: system config means system scope, everything else user.
+		if p == systemConfPath {
+			g.Scope = "system"
+		} else {
+			g.Scope = "user"
+		}
+	}
 	data, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -585,7 +633,11 @@ func (g *Global) validateV3() error {
 func (g *Global) Render() string {
 	var b strings.Builder
 	b.WriteString("# maio global config (one per machine or user; not maio.toml)\n")
-	b.WriteString("# Start-on-boot is on by default. Use \"sudo maio boot 0\" to disable it.\n\n")
+	if g.Scope == "system" {
+		b.WriteString("# Start-on-boot is on by default. Use \"sudo maio --system boot 0\" to disable it.\n\n")
+	} else {
+		b.WriteString("# Start-on-boot is on by default. Use \"maio boot 0\" to disable it.\n\n")
+	}
 	b.WriteString("# --- model store ---\n")
 	fmt.Fprintf(&b, "boot        = %d\n", g.Boot)
 	fmt.Fprintf(&b, "models_root = %q\n", g.ModelsRoot)
@@ -664,12 +716,15 @@ func (g *Global) SaveTo(path string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return errs.Wrap(errs.Permission, err, "cannot create config directory %s", dir).
-			WithHint("run as root (sudo maio ...), or use a per-user config with --user")
+			WithHint("use the default user scope (maio ...), or system scope: sudo maio --system ...")
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(g.Render()), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(g.Render()), 0o640); err != nil {
 		return errs.Wrap(errs.Permission, err, "cannot write config %s", path).
 			WithHint("check directory permissions, or run with sudo")
+	}
+	if g.Scope == "system" {
+		owner.ChownMode(tmp, g.RunAs, 0o640)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)

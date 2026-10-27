@@ -72,7 +72,7 @@ fi
 if [ ! -f "$CONF" ]; then
   cat > "$CONF" <<EOF
 # maio global config (one per machine; not maio.toml)
-# Start-on-boot is on by default. Use "sudo maio boot 0" to disable it.
+# Start-on-boot is on by default. Use "sudo maio --system boot 0" to disable it.
 
 boot        = $BOOT
 models_root = "$MODELS_ROOT"
@@ -125,15 +125,15 @@ fi
 
 echo "installed: $DEST"
 if [ "$START" -eq 1 ]; then
-  if "$DEST" boot "$BOOT"; then
+  if "$DEST" --system boot "$BOOT"; then
     if command -v systemctl >/dev/null 2>&1; then
       systemctl try-restart maio >/dev/null 2>&1 || true
     fi
     echo "start-on-boot: boot = $BOOT"
   else
-    echo "warning: could not configure the service; run manually: maio serve" >&2
+    echo "warning: could not configure the service; run manually: sudo maio --system serve" >&2
   fi
 else
   echo "start-on-boot not configured (--no-start)"
 fi
-echo "next: set llama_bin in $CONF to your llama-server (or install maio-llama), then run: maio doctor"
+echo "next: set llama_bin in $CONF to your llama-server (or install maio-llama), then run: sudo maio --system doctor"

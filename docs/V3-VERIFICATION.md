@@ -189,7 +189,22 @@ maio rollback --no-restart
 The backup is written to `<state_dir>/upgrade/maio-3.0.0-<timestamp>`; replacement
 succeeds, rollback succeeds, and `maio version` still reports 3.0.0.
 
-## 15. Known limitations
+## 15. Default user scope / explicit system scope (3.1.0)
+
+- `maio version` → `scope: user`, config `~/.config/maio/maio.conf`;
+- `maio --system version` as non-root → exit 5 with
+  `sudo maio --system version`;
+- `maio --system --user ...` → exit 2 (mutually exclusive);
+- `maio boot 1 --dry-run` → user unit `~/.config/systemd/user/maio.service`,
+  `systemctl --user enable --now`;
+- generated unit tests: system `ExecStart=... --system serve`, user
+  `ExecStart=... --user serve`; the user unit never sets `User=`;
+- the two scopes use separate config/state/ports and can coexist.
+
+3.1.0 only changes scope selection and defaults; queueing, auth, memory and the
+supervisor are the same as 3.0.0, so the measurements above still apply.
+
+## 16. Known limitations
 
 - The 24h soak harness is provided but was not run continuously for 24h on this machine.
 - CUDA runtime libraries (`libcudart`/`libcublas`/`libcublasLt`) are not bundled with

@@ -13,6 +13,18 @@
 并同时提供 **Ollama 兼容 API** 与 **OpenAI 兼容 API**。
 控制面用 Go 编写，**零第三方依赖**，单二进制；只支持 **Linux x86-64**（Ubuntu 已实测）。
 
+## 两种作用域：默认用户级
+
+| 作用域 | 命令 | 配置 / 状态 | systemd |
+| --- | --- | --- | --- |
+| **用户级（默认）** | `maio ...` | `~/.config/maio/maio.conf` / `~/.local/state/maio` | `systemd --user` |
+| **系统级（显式）** | `sudo maio --system ...` | `/etc/maio/maio.conf` / `/var/lib/maio` | 系统 `maio.service` |
+
+- 普通 `maio ...` **永远是用户级**，即使是 root 执行；这样不会误改 `/etc` 或系统服务。
+- 要操作系统级，必须显式加 `--system`，且需要 root。
+- 两套可以同时存在：各自独立的端口、模型目录、API Key、审计日志和 systemd 服务。
+- `--user` 仍然接受，等价于默认值。
+
 ## V3 做了什么
 
 V3 不再只是“能跑”，而是能长期挂在机房里：
@@ -53,12 +65,13 @@ V3 不再只是“能跑”，而是能长期挂在机房里：
 ## 构建与测试
 
 ```bash
-make build        # 产出 bin/maio（默认 3.0.0）
+make build        # 产出 bin/maio（默认 3.1.0）
 make test         # 单元测试
 make race         # 竞态检测
 make smoke        # 端到端冒烟（无需 GPU/root）
 make soak         # 并发 + 200MB 内存目标压测（mock 引擎，无需 GPU）
 make verify       # vet + test + smoke
+make install-user # 安装到 ~/.local/bin 并启用用户级服务（默认，无需 root）
 ```
 
 完整的 V3 验证（含真实模型）见 [`docs/V3-VERIFICATION.zh-CN.md`](docs/V3-VERIFICATION.zh-CN.md)。
@@ -68,7 +81,7 @@ make verify       # vet + test + smoke
 ### apt / Debian 包（推荐）
 
 ```bash
-sudo bash deploy/apt-install.sh     # 构建 .deb、注册本地 apt 仓库、安装并启动
+sudo bash deploy/apt-install.sh     # 构建 .deb、注册本地 apt 仓库、安装系统服务
 sudo apt install maio-cluster       # 之后可直接用
 ```
 
@@ -76,7 +89,7 @@ sudo apt install maio-cluster       # 之后可直接用
 
 ```bash
 make deb
-sudo apt install ./dist/maio-cluster_3.0.0_amd64.deb
+sudo apt install ./dist/maio-cluster_3.1.0_amd64.deb
 ```
 
 安装包会：
@@ -86,33 +99,46 @@ sudo apt install ./dist/maio-cluster_3.0.0_amd64.deb
 - 写入加固后的 systemd unit；
 - 立即 `enable --now`，开机自启。
 
-### 源码安装
+安装包安装的是**系统级服务**；日常用户级命令仍然是 `maio ...`，管理系统级要加
+`sudo maio --system ...`。两套互不干扰。
+
+### 源码安装（系统级）
 
 ```bash
 make build
-sudo bash ./maio-cluster              # 安装并开机自启
+sudo bash ./maio-cluster              # 安装系统服务并开机自启
 sudo bash ./maio-cluster --no-start   # 只安装
 sudo bash ./maio-cluster --boot 0     # 安装但关闭自启
 ```
 
-### 无 root / 用户级服务
+### 用户级安装 / 服务（默认）
 
 ```bash
-maio boot 1 --user
+make build
+install -m 0755 bin/maio ~/.local/bin/maio
+maio boot 1                           # 默认就是用户级
 sudo loginctl enable-linger "$USER"   # 未登录也启动
 ```
 
 用户级服务使用用户自己的配置与状态目录，不创建 `maio` 系统用户。
+需要系统级时：`sudo maio --system boot 1`。
 
 ### 有电就启动
 
 “来电自动开机”由主板固件决定，操作系统无法远程修改。需要两步：
 
 1. BIOS/UEFI 中开启 **Restore on AC Power Loss / AC Back = Power On**；
-2. 安装时保持 `boot = 1`（默认），并确认 `systemctl is-enabled maio` 为 `enabled`。
+2. 安装时保持 `boot = 1`（默认），并确认对应作用域的服务已启用：
 
-市电恢复后机器上电，systemd 启动 `maio.service`；若上次是异常掉电，`Restart=always`
-也会在进程崩溃时自动拉起。可用 `maio status` 验证。
+```bash
+maio status                              # 用户级
+sudo maio --system status                # 系统级
+systemctl --user is-enabled maio         # 用户级
+systemctl is-enabled maio                # 系统级
+```
+
+市电恢复后机器上电，systemd 启动对应服务；若上次是异常掉电，`Restart=always`
+也会在进程崩溃时自动拉起。
 
 ## llama.cpp 轻量化（Linux x86-64）
 
@@ -148,7 +174,7 @@ LLAMA_BUILD=/path/to/llama.cpp/build make llama-bundle
 
 ```bash
 make llama-bundle
-make deb-llama                # dist/maio-llama_3.0.0_amd64.deb -> /opt/maio/llama
+make deb-llama                # dist/maio-llama_3.1.0_amd64.deb -> /opt/maio/llama
 ```
 
 然后在 `/etc/maio/maio.conf` 设置：
@@ -160,8 +186,12 @@ llama_lib = "/opt/maio/llama/lib:/usr/local/cuda/lib64"
 
 ## 配置
 
-全局配置：`/etc/maio/maio.conf`（扁平 TOML，一台机器一份，**不是** `maio.toml`）。
-无 root 时回退到 `~/.config/maio/maio.conf` 和用户状态目录；`MAIO_CONF` 覆盖。
+配置是扁平 TOML，一台机器/一个作用域一份（**不是** `maio.toml`）：
+
+- 用户级（默认）：`~/.config/maio/maio.conf`，状态 `~/.local/state/maio`
+- 系统级（`--system`）：`/etc/maio/maio.conf`，状态 `/var/lib/maio`
+
+`MAIO_CONF` 可覆盖所选作用域的配置路径。
 
 ### 服务与安全
 
@@ -199,7 +229,7 @@ llama_lib = "/opt/maio/llama/lib:/usr/local/cuda/lib64"
 | `max_procs` | GOMAXPROCS；`0`=全部核心 | `0` |
 | `max_open_files` | RLIMIT_NOFILE 目标 | `1048576` |
 | `restore` | 启动时恢复常驻模型 | `1` |
-| `run_as` | systemd `User=`；安装包用 `maio` | 空=root |
+| `run_as` | 系统级 systemd `User=`；安装包用 `maio` | 空=root |
 
 未知键、类型错误、非法枚举都会带行号报错。`maio config` 可查看/修改/校验。
 
@@ -214,8 +244,8 @@ path   = "models/Qwen3.5-9B-Q4_K_M.gguf"
 ## 命令
 
 ```text
-# 模型
-sudo maio pull|install <name> [root] [--url URL|PATH] [--sha256 HEX]
+# 模型（用户级；系统级把 maio 换成 sudo maio --system）
+maio pull|install <name> [root] [--url URL|PATH] [--sha256 HEX]
 maio list [--wide] [--json]
 maio show <name> [--json]
 maio cp <source> <destination>
@@ -227,11 +257,18 @@ maio serve [--host ADDR] [--port N] [--api-key KEY] [--no-auth]
 maio ps [--json]
 maio load <name>                     # 常驻，重启后自动恢复
 maio stop <name> | --all
-maio status [--json] [--user]
+maio status [--json]
 maio stats [--json]
-maio service <start|stop|restart|status|enable|disable|logs> [--user]
-maio restart [--user]
-sudo maio boot 1|0 [--user]
+maio service <start|stop|restart|status|enable|disable|logs>
+maio restart
+maio boot 1|0
+
+# 系统级（显式、需要 root）
+sudo maio --system pull|install ...       # 安装模型到 /var/lib/maio
+sudo maio --system status
+sudo maio --system service start|stop|restart|status
+sudo maio --system restart
+sudo maio --system boot 1|0
 
 # 安全与配置
 maio token [show] [--show] [--json]
@@ -366,6 +403,7 @@ OpenAI 请求按原样透传给 llama-server，保留全部参数与流式行为
 ```ini
 Type=notify
 NotifyAccess=main
+ExecStart=/usr/bin/maio --system serve    # 用户 unit 则是 --user serve
 Restart=always
 WatchdogSec=30
 KillMode=mixed
@@ -401,6 +439,15 @@ maio service logs --tail 200
 maio logs --tail 50
 maio upgrade ./bin/maio     # 原子替换 + 备份 + 重启，失败自动回滚
 maio rollback
+
+# 系统级对应命令
+sudo maio --system status
+sudo maio --system stats
+sudo maio --system doctor
+sudo maio --system service logs --tail 200
+sudo maio --system logs --tail 50
+sudo maio --system upgrade ./bin/maio
+sudo maio --system rollback
 ```
 
 日志：

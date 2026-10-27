@@ -99,9 +99,13 @@ func cmdDoctor(conf *config.Global, args []string) int {
 	if _, err := os.Stat(conf.Source); err == nil {
 		c.ok("config", "file", conf.Source)
 	} else {
-		c.warn("config", "file", fmt.Sprintf("%s not found; using built-in defaults", conf.Source),
-			"create it with: sudo maio boot 1 (or maio boot 1 --user)")
+		hint := "create it with: maio boot 1"
+		if conf.Scope == "system" {
+			hint = "create it with: sudo maio --system boot 1"
+		}
+		c.warn("config", "file", fmt.Sprintf("%s not found; using built-in defaults", conf.Source), hint)
 	}
+	c.ok("config", "scope", fmt.Sprintf("%s (default is user; --system is explicit)", conf.Scope))
 	c.ok("config", "start on boot", fmt.Sprintf("boot = %d", conf.Boot))
 	c.ok("config", "models_root", conf.ModelsRoot)
 	c.ok("config", "state_dir", conf.StateDir)
@@ -240,67 +244,6 @@ func cmdDoctor(conf *config.Global, args []string) int {
 		}
 	}
 
-	// Service
-	sysSt := systemd.Query(systemd.System)
-	userSt := systemd.Query(systemd.User)
-	serviceDetail := func(st systemd.Status) string {
-		return fmt.Sprintf("unit=%s exists=%v enabled=%v active=%v", systemd.UnitPath(st.Mode), st.Exists, st.Enabled, st.Active)
-	}
-	if sysSt.Exists || sysSt.Enabled || sysSt.Active {
-		c.ok("service", "system unit", serviceDetail(sysSt))
-	} else if userSt.Enabled || userSt.Active {
-		c.ok("service", "system unit", "not installed; using the per-user service")
-	} else {
-		c.warn("service", "system unit", "not installed", "enable it with: sudo maio boot 1")
-	}
-	if userSt.Exists || userSt.Enabled || userSt.Active {
-		c.ok("service", "user unit", serviceDetail(userSt))
-		if ok, _ := systemd.Linger(currentUser()); !ok {
-			c.warn("service", "user linger", "disabled; the user service starts after login",
-				"for boot-time start run: "+systemd.LingerHint(currentUser()))
-		} else {
-			c.ok("service", "user linger", "enabled")
-		}
-	}
-	if conf.Boot == 1 {
-		switch {
-		case userSt.Enabled && userSt.Active:
-			c.ok("service", "start on boot", "user service is enabled and running")
-		case sysSt.Enabled && sysSt.Active:
-			c.ok("service", "start on boot", "system service is enabled and running")
-		case userSt.Enabled || sysSt.Enabled:
-			c.fail("service", "start on boot", "boot = 1 but the enabled maio service is not running",
-				"start it with: systemctl --user start maio  (or: sudo systemctl start maio); inspect with: journalctl -u maio -n 50")
-		default:
-			c.fail("service", "start on boot", "boot = 1 but no enabled maio service",
-				"run: sudo maio boot 1  (or: maio boot 1 --user)")
-		}
-	} else if userSt.Active || sysSt.Active {
-		c.warn("service", "start on boot", "boot = 0 but a maio service is currently running",
-			"the service will not start automatically after reboot")
-	}
-	if conf.RunAs != "" {
-		if _, err := user.Lookup(conf.RunAs); err != nil {
-			c.fail("service", "service user", fmt.Sprintf("run_as = %q does not exist", conf.RunAs),
-				"create it with: sudo adduser --system --group --no-create-home "+conf.RunAs)
-		} else {
-			c.ok("service", "service user", conf.RunAs)
-		}
-	}
-	activeMode := systemd.System
-	if !sysSt.Exists && userSt.Exists {
-		activeMode = systemd.User
-	}
-	if data, err := os.ReadFile(systemd.UnitPath(activeMode)); err == nil {
-		unit := string(data)
-		if !strings.Contains(unit, "Type=notify") || !strings.Contains(unit, "NoNewPrivileges=yes") {
-			c.warn("service", "unit hardening", "the installed unit is from V2",
-				"regenerate it with: sudo maio boot 1")
-		} else {
-			c.ok("service", "unit hardening", "notify + watchdog + sandbox present")
-		}
-	}
-
 	// Index
 	idx, idxErr := index.Load()
 	if idxErr != nil {
@@ -319,7 +262,7 @@ func cmdDoctor(conf *config.Global, args []string) int {
 	}
 	if len(entries) == 0 {
 		c.warn("models", "installed models", "none",
-			"install one with: sudo maio install <name> --url <url>")
+			"install one with: maio install <name> --url <url> (or: sudo maio --system install ...)")
 	}
 	for _, e := range entries {
 		name := e.Model.Name
@@ -328,7 +271,7 @@ func cmdDoctor(conf *config.Global, args []string) int {
 			continue
 		}
 		if e.Missing {
-			c.fail("models", name, "model file is missing", fmt.Sprintf("reinstall it: sudo maio install %s", name))
+			c.fail("models", name, "model file is missing", fmt.Sprintf("reinstall it: maio install %s", name))
 			continue
 		}
 		info, err := gguf.Read(e.Model.FilePath())
@@ -369,6 +312,63 @@ func cmdDoctor(conf *config.Global, args []string) int {
 		}
 	}
 
+	// Service (selected scope only; the other scope is independent)
+	selectedMode := systemd.User
+	bootCmd := "maio boot 1"
+	if conf.Scope == "system" {
+		selectedMode = systemd.System
+		bootCmd = "sudo maio --system boot 1"
+	}
+	st := systemd.Query(selectedMode)
+	serviceDetail := func(st systemd.Status) string {
+		return fmt.Sprintf("unit=%s exists=%v enabled=%v active=%v", systemd.UnitPath(st.Mode), st.Exists, st.Enabled, st.Active)
+	}
+	c.ok("service", "scope", fmt.Sprintf("%s (default is user; --system selects /etc/maio)", conf.Scope))
+	if st.Exists || st.Enabled || st.Active {
+		c.ok("service", "unit", serviceDetail(st))
+	} else {
+		c.warn("service", "unit", "not installed", "enable it with: "+bootCmd)
+	}
+	if selectedMode == systemd.User && st.Exists {
+		if ok, _ := systemd.Linger(currentUser()); !ok {
+			c.warn("service", "user linger", "disabled; the user service starts after login",
+				"for boot-time start run: "+systemd.LingerHint(currentUser()))
+		} else {
+			c.ok("service", "user linger", "enabled")
+		}
+	}
+	if conf.Boot == 1 {
+		if st.Enabled && st.Active {
+			c.ok("service", "start on boot", fmt.Sprintf("%s service is enabled and running", selectedMode))
+		} else if st.Enabled {
+			c.fail("service", "start on boot", "boot = 1 but the enabled maio service is not running",
+				"start it with: "+serviceStartHint(selectedMode)+"; inspect: "+serviceJournalHint(selectedMode))
+		} else {
+			c.fail("service", "start on boot", "boot = 1 but the maio service is not enabled",
+				"run: "+bootCmd)
+		}
+	} else if st.Active {
+		c.warn("service", "start on boot", "boot = 0 but the maio service is currently running",
+			"the service will not start automatically after reboot")
+	}
+	if conf.Scope == "system" && conf.RunAs != "" {
+		if _, err := user.Lookup(conf.RunAs); err != nil {
+			c.fail("service", "service user", fmt.Sprintf("run_as = %q does not exist", conf.RunAs),
+				"create it with: sudo adduser --system --group --no-create-home "+conf.RunAs)
+		} else {
+			c.ok("service", "service user", conf.RunAs)
+		}
+	}
+	if data, err := os.ReadFile(systemd.UnitPath(selectedMode)); err == nil {
+		unit := string(data)
+		if !strings.Contains(unit, "Type=notify") || !strings.Contains(unit, "NoNewPrivileges=yes") {
+			c.warn("service", "unit hardening", "the installed unit is from V2",
+				"regenerate it with: "+bootCmd)
+		} else {
+			c.ok("service", "unit hardening", "notify + watchdog + sandbox present")
+		}
+	}
+
 	// Live service (only when a unit is active or the port answers)
 	if stats, err := fetchStats(conf, 2*time.Second); err == nil {
 		c.ok("service", "health", fmt.Sprintf("reachable, uptime %s", formatUptime(stats.Metrics.UptimeSeconds)))
@@ -384,13 +384,17 @@ func cmdDoctor(conf *config.Global, args []string) int {
 		} else if !stats.Auth.Loopback {
 			c.warn("service", "api auth", "the API is reachable without a key")
 		}
-	} else if sysSt.Active || userSt.Active {
+	} else if st.Active {
 		var ae *apiError
-		hint := "inspect: journalctl -u maio -n 50 (or --user)"
+		hint := "inspect: " + serviceJournalHint(selectedMode)
 		detail := err.Error()
 		if errors.As(err, &ae) && ae.Status == 404 {
 			detail = "the running service does not expose /api/stats (it may be an older binary)"
-			hint = "install/restart V3: sudo maio boot 1 (or: maio boot 1 --user), then: maio service restart"
+			if conf.Scope == "system" {
+				hint = "install/restart V3: sudo maio --system boot 1, then: sudo maio --system restart"
+			} else {
+				hint = "install/restart V3: maio boot 1, then: maio restart"
+			}
 		} else if errors.As(err, &ae) && ae.Status == 401 {
 			hint = "read the key with: maio token --show"
 		}
@@ -486,6 +490,20 @@ func writableDir(p string) bool {
 	_ = f.Close()
 	_ = os.Remove(name)
 	return true
+}
+
+func serviceStartHint(mode systemd.Mode) string {
+	if mode == systemd.System {
+		return "sudo systemctl start maio"
+	}
+	return "systemctl --user start maio"
+}
+
+func serviceJournalHint(mode systemd.Mode) string {
+	if mode == systemd.System {
+		return "journalctl -u maio -n 50"
+	}
+	return "journalctl --user -u maio -n 50"
 }
 
 func nonEmpty(v, fallback string) string {

@@ -52,7 +52,7 @@ if [ "$1" = "configure" ]; then
             systemctl disable --now maio.service >/dev/null 2>&1 || true
         fi
     else
-        echo "maio: warning: systemctl not found; start it manually with: maio serve" >&2
+        echo "maio: warning: systemctl not found; start it manually with: sudo maio --system serve" >&2
     fi
 fi
 

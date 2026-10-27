@@ -28,6 +28,7 @@ func cmdToken(conf *config.Global, args []string) int {
 			fmt.Println("       maio token rotate [--restart]")
 			fmt.Println("       maio token set <key>")
 			fmt.Println("       maio token clear")
+			fmt.Println("       sudo maio --system token ...    system key")
 			return 0
 		case "--show":
 			show = true
@@ -163,9 +164,9 @@ func cmdToken(conf *config.Global, args []string) int {
 
 // fixKeyOwnership hands a root-created key and its auth directory to the
 // service user, otherwise a systemd service running as maio cannot read the
-// 0600 key that "sudo maio token rotate" just wrote.
+// 0600 key that "sudo maio --system token rotate" just wrote.
 func fixKeyOwnership(conf *config.Global, keyFile string) {
-	if os.Geteuid() != 0 || conf.RunAs == "" || strings.HasPrefix(keyFile, "/home/") {
+	if conf.Scope != "system" || os.Geteuid() != 0 || conf.RunAs == "" || strings.HasPrefix(keyFile, "/home/") {
 		return
 	}
 	u, err := user.Lookup(conf.RunAs)

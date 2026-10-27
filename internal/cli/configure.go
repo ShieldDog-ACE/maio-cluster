@@ -42,10 +42,11 @@ func cmdConfig(conf *config.Global, args []string) int {
 	switch args[0] {
 	case "-h", "--help":
 		fmt.Println("usage: maio config [show] [--json]")
+		fmt.Println("       sudo maio --system config [show|set|edit|...]    system config")
 		fmt.Println("       maio config path")
 		fmt.Println("       maio config get <key>")
-		fmt.Println("       maio config set <key> <value> [--user] [--restart]")
-		fmt.Println("       maio config edit [--user]")
+		fmt.Println("       maio config set <key> <value> [--restart]")
+		fmt.Println("       maio config edit")
 		fmt.Println("       maio config keys")
 		return 0
 	case "show":
@@ -122,6 +123,7 @@ func configKeyOrder() []string {
 func configShow(conf *config.Global, asJSON bool) int {
 	if asJSON {
 		rec := map[string]any{
+			"scope":       conf.Scope,
 			"source":      conf.Source,
 			"runtime_dir": conf.RuntimeDir,
 			"key_file":    conf.AuthKeyFile(),
@@ -144,6 +146,7 @@ func configShow(conf *config.Global, asJSON bool) int {
 		_ = json.NewEncoder(os.Stdout).Encode(rec)
 		return 0
 	}
+	fmt.Printf("# scope: %s\n", conf.Scope)
 	fmt.Printf("# source: %s\n", conf.Source)
 	fmt.Printf("# runtime_dir: %s\n", conf.RuntimeDir)
 	fmt.Printf("# key_file: %s\n\n", conf.AuthKeyFile())
@@ -180,17 +183,14 @@ func configGetValue(conf *config.Global, key string) (any, error) {
 }
 
 func configSet(conf *config.Global, args []string) int {
-	userMode := false
 	restart := false
 	var pos []string
 	for _, a := range args {
 		switch a {
-		case "--user":
-			userMode = true
 		case "--restart":
 			restart = true
 		case "-h", "--help":
-			fmt.Println("usage: maio config set <key> <value> [--user] [--restart]")
+			fmt.Println("usage: maio config set <key> <value> [--restart]")
 			return 0
 		default:
 			if strings.HasPrefix(a, "--") {
@@ -200,7 +200,7 @@ func configSet(conf *config.Global, args []string) int {
 		}
 	}
 	if len(pos) < 2 {
-		return usagef("usage: maio config set <key> <value> [--user] [--restart]")
+		return usagef("usage: maio config set <key> <value> [--restart]")
 	}
 	key := pos[0]
 	value := strings.Join(pos[1:], " ")
@@ -223,17 +223,14 @@ func configSet(conf *config.Global, args []string) int {
 	}
 	path := conf.Source
 	if path == "" {
-		path = config.ConfPath()
-	}
-	if userMode {
-		path = config.UserConfPath()
+		path = config.ConfPathFor(conf.Scope)
 	}
 	conf.Source = path
 	if err := conf.SaveTo(path); err != nil {
 		return fail(err)
 	}
 	fmt.Printf("updated %s: %s = %s\n", path, key, redactConfigValue(key, value))
-	logging.Info("config.set", "path", path, "key", key, "user", userMode)
+	logging.Info("config.set", "path", path, "key", key, "scope", conf.Scope)
 	if restart {
 		return cmdRestart(conf, nil)
 	}
@@ -251,13 +248,11 @@ func redactConfigValue(key, value string) string {
 }
 
 func configEdit(conf *config.Global, args []string) int {
-	userMode := false
 	for _, a := range args {
 		switch a {
-		case "--user":
-			userMode = true
 		case "-h", "--help":
-			fmt.Println("usage: maio config edit [--user]")
+			fmt.Println("usage: maio config edit                  user config (default)")
+			fmt.Println("       sudo maio --system config edit    system config")
 			return 0
 		default:
 			return usagef("unknown argument %s", a)
@@ -265,10 +260,7 @@ func configEdit(conf *config.Global, args []string) int {
 	}
 	path := conf.Source
 	if path == "" {
-		path = config.ConfPath()
-	}
-	if userMode {
-		path = config.UserConfPath()
+		path = config.ConfPathFor(conf.Scope)
 	}
 	editor := os.Getenv("VISUAL")
 	if editor == "" {
@@ -284,7 +276,7 @@ func configEdit(conf *config.Global, args []string) int {
 	}
 	old := os.Getenv("MAIO_CONF")
 	_ = os.Setenv("MAIO_CONF", path)
-	_, err := config.LoadGlobal()
+	_, err := config.LoadGlobalMode(conf.Scope)
 	if old == "" {
 		_ = os.Unsetenv("MAIO_CONF")
 	} else {
@@ -299,7 +291,7 @@ func configEdit(conf *config.Global, args []string) int {
 }
 
 func serviceActive(conf *config.Global) bool {
-	mode, installed := serviceMode(conf, false)
+	mode, installed := serviceMode(conf)
 	if !installed {
 		return false
 	}

@@ -189,7 +189,21 @@ maio rollback --no-restart
 结果：备份写入 `<state_dir>/upgrade/maio-3.0.0-<timestamp>`，替换成功；
 rollback 恢复成功；`maio version` 仍为 3.0.0。
 
-## 15. 已知限制
+## 15. 默认用户级 / 系统级显式（3.1.0）
+
+- `maio version` → `scope: user`，配置 `~/.config/maio/maio.conf`；
+- `maio --system version` 非 root → exit 5，提示 `sudo maio --system version`；
+- `maio --system --user ...` → exit 2（互斥）；
+- `maio boot 1 --dry-run` → 用户 unit `~/.config/systemd/user/maio.service`，
+  `systemctl --user enable --now`；
+- 生成 unit 测试：系统 unit `ExecStart=... --system serve`，用户 unit
+  `ExecStart=... --user serve`；用户 unit 不写 `User=`；
+- 两套作用域使用不同配置/状态/端口，可同时存在。
+
+说明：3.1.0 只改变作用域选择与默认值，队列、鉴权、内存和 supervisor 等核心
+实现与 3.0.0 相同；上面的测试结果仍适用。
+
+## 16. 已知限制
 
 - 24h 连续压测脚本已提供，但本次未在本机连续运行 24 小时；
 - CUDA 运行时（`libcudart`/`libcublas`/`libcublasLt`）不随轻量运行时打包，

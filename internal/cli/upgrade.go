@@ -41,6 +41,7 @@ func cmdUpgrade(conf *config.Global, args []string) int {
 		switch a {
 		case "-h", "--help":
 			fmt.Println("usage: maio upgrade <path-to-maio-binary> [--no-restart] [--force]")
+			fmt.Println("       sudo maio --system upgrade ...    system binary backup/restart")
 			fmt.Println("       atomically replaces the running binary and restarts the service")
 			return 0
 		case "--no-restart":
@@ -119,6 +120,7 @@ func cmdRollback(conf *config.Global, args []string) int {
 		switch a {
 		case "-h", "--help":
 			fmt.Println("usage: maio rollback [--no-restart]")
+			fmt.Println("       sudo maio --system rollback [--no-restart]")
 			return 0
 		case "--no-restart":
 			noRestart = true
@@ -320,7 +322,7 @@ func loadUpgradeState(conf *config.Global) (upgradeState, error) {
 }
 
 func restartIfActive(conf *config.Global) error {
-	mode, installed := serviceMode(conf, false)
+	mode, installed := serviceMode(conf)
 	if !installed {
 		fmt.Println("no systemd unit is installed; start the new binary with: maio serve")
 		return nil

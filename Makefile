@@ -1,7 +1,7 @@
 BIN := bin/maio
 GO ?= go
 CGO_ENABLED ?= 0
-VERSION ?= 3.0.0
+VERSION ?= 3.1.0
 ARCH ?= amd64
 JOBS ?= $(shell nproc 2>/dev/null || echo 4)
 
@@ -25,6 +25,15 @@ fmt:
 
 install: build
 	sudo bash deploy/install.sh
+
+# User scope is the default; this needs no root.
+install-user: build
+	install -D -m 0755 bin/maio "$(HOME)/.local/bin/maio"
+	"$(HOME)/.local/bin/maio" boot 1
+
+uninstall-user:
+	-"$(HOME)/.local/bin/maio" boot 0
+	rm -f "$(HOME)/.local/bin/maio"
 
 uninstall:
 	sudo systemctl disable --now maio 2>/dev/null || true

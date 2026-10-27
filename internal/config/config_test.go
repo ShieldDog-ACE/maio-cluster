@@ -195,3 +195,47 @@ func TestV3EnumValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestUserScopeMissingConfigIsWritable(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MAIO_CONF", filepath.Join(dir, "missing.conf"))
+	g, err := LoadGlobalMode("user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Scope != "user" {
+		t.Fatalf("scope = %q", g.Scope)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	if g.ModelsRoot != filepath.Join(home, "AI") {
+		t.Fatalf("models root = %q", g.ModelsRoot)
+	}
+	if g.StateDir != filepath.Join(home, ".local", "state", "maio") {
+		t.Fatalf("state dir = %q", g.StateDir)
+	}
+}
+
+func TestScopeExplicit(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "maio.conf")
+	if err := os.WriteFile(p, []byte("port = 23456\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MAIO_CONF", p)
+	user, err := LoadGlobalMode("user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.Scope != "user" || user.Port != 23456 {
+		t.Fatalf("user scope = %q port %d", user.Scope, user.Port)
+	}
+	system, err := LoadGlobalMode("system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if system.Scope != "system" || system.Port != 23456 {
+		t.Fatalf("system scope = %q port %d", system.Scope, system.Port)
+	}
+}
