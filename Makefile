@@ -1,11 +1,13 @@
 BIN := bin/maio
 GO ?= go
-VERSION ?= 0.1.0-dev
+CGO_ENABLED ?= 0
+VERSION ?= 2.0.0
+ARCH ?= amd64
 
-.PHONY: build test vet fmt install uninstall smoke clean
+.PHONY: build test vet fmt install uninstall smoke clean deb repo
 
 build:
-	$(GO) build -trimpath -ldflags "-s -w -X github.com/ShieldDog-ACE/maio-cluster/internal/cli.Version=$(VERSION)" -o $(BIN) .
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) build -trimpath -ldflags "-s -w -X github.com/ShieldDog-ACE/maio-cluster/internal/cli.Version=$(VERSION)" -o $(BIN) .
 
 test:
 	$(GO) test ./...
@@ -17,13 +19,21 @@ fmt:
 	gofmt -l -w .
 
 install: build
-	install -m 0755 $(BIN) /usr/local/bin/maio
+	sudo bash deploy/install.sh
 
 uninstall:
-	rm -f /usr/local/bin/maio
+	sudo systemctl disable --now maio 2>/dev/null || true
+	sudo rm -f /usr/local/bin/maio /etc/systemd/system/maio.service
+	sudo systemctl daemon-reload 2>/dev/null || true
 
 smoke: build
 	bash scripts/smoke.sh
 
+deb: build
+	VERSION=$(VERSION) ARCH=$(ARCH) bash deploy/build-deb.sh
+
+repo: deb
+	VERSION=$(VERSION) ARCH=$(ARCH) bash deploy/apt-repo.sh
+
 clean:
-	rm -rf bin
+	rm -rf bin dist

@@ -1,0 +1,14 @@
+Package: maio-cluster
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: @ARCH@
+Maintainer: ShieldDog-ACE <shielddog-ace@users.noreply.github.com>
+Installed-Size: @INSTALLED_SIZE@
+Homepage: https://github.com/ShieldDog-ACE/maio-cluster
+Description: lightweight llama.cpp model manager and Ollama-compatible service
+ maio registers, downloads and deletes GGUF models, runs local inference with
+ llama.cpp and exposes a minimal Ollama-compatible HTTP API to the LAN.
+ .
+ The package installs the maio binary, a default configuration with start on
+ boot enabled, and a systemd service.

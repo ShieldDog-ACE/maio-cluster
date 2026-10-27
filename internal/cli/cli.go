@@ -13,25 +13,32 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path"
+	"os/signal"
 	"path/filepath"
-	"runtime"
+	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/ShieldDog-ACE/maio-cluster/internal/config"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/download"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/engine"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/errs"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/gguf"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/hardware"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/index"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/logging"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/naming"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/registry"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/server"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/systemd"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/vram"
 )
 
 // Version can be overridden at build time with -ldflags.
-var Version = "0.1.0-dev"
+var Version = "2.0.0-dev"
 
 // Run is the entry point and returns the exit code.
 func Run(args []string) int {
@@ -43,56 +50,35 @@ func Run(args []string) int {
 	case "-h", "--help", "help":
 		printHelp()
 		return 0
+	case "version", "--version", "-v":
+		return cmdVersion(args[1:])
 	case "sudo":
-		return runSudo(args[1:])
-	case "__as-root":
-		return dispatch(args[1:])
-	default:
-		return dispatch(args)
-	}
-}
-
-func runSudo(rest []string) int {
-	if len(rest) == 0 {
-		return usage("missing command after sudo")
-	}
-	if os.Geteuid() == 0 {
-		return dispatch(rest)
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return fail(5, "cannot locate the maio executable: %v", err)
-	}
-	sudo, err := exec.LookPath("sudo")
-	if err != nil {
-		return fail(5, "sudo not found: run as root, or install sudo first")
-	}
-	cmd := exec.Command(sudo, append([]string{"--", exe, "__as-root"}, rest...)...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			return ee.ExitCode()
-		}
-		return fail(5, "failed to execute through sudo: %v", err)
-	}
-	return 0
-}
-
-func dispatch(args []string) int {
-	if len(args) == 0 {
-		printHelp()
-		return 2
+		err := errs.New(errs.Usage, `"maio sudo" is no longer supported`).
+			WithHint("use \"sudo maio %s\" instead", strings.Join(args[1:], " "))
+		errs.Print(os.Stderr, err)
+		return errs.ExitCode(err)
 	}
 	conf, err := config.LoadGlobal()
 	if err != nil {
-		return fail(2, "%v", err)
+		errs.Print(os.Stderr, err)
+		return errs.ExitCode(err)
 	}
+	logging.Init(conf.RuntimeDir)
+	defer logging.Close()
+	start := time.Now()
+	logging.Info("cli.start", "command", args[0], "args", sanitizeArgs(args[1:]))
+	code := dispatch(conf, args)
+	logging.Info("cli.end", "command", args[0], "exit", code, "duration_ms", time.Since(start).Milliseconds())
+	return code
+}
+
+func dispatch(conf *config.Global, args []string) int {
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "install":
 		return cmdInstall(conf, rest)
 	case "list", "ls":
-		return cmdList(conf)
+		return cmdList(conf, rest)
 	case "show":
 		return cmdShow(conf, rest)
 	case "rm", "uninstall":
@@ -102,206 +88,544 @@ func dispatch(args []string) int {
 	case "serve":
 		return cmdServe(conf, rest)
 	case "ps":
-		return cmdPs(conf)
+		return cmdPs(conf, rest)
 	case "stop":
 		return cmdStop(conf, rest)
 	case "boot":
 		return cmdBoot(conf, rest)
+	case "doctor":
+		return cmdDoctor(conf, rest)
+	case "logs", "log":
+		return cmdLogs(conf, rest)
 	case "version", "--version":
-		fmt.Printf("maio %s\n  go: %s\n  config: %s\n", Version, runtime.Version(), config.ConfPath())
-		return 0
+		return cmdVersion(rest)
 	default:
-		return usage("unknown command %q (see maio --help)", cmd)
+		err := errs.Newf(errs.Usage, "unknown command %q", cmd).
+			WithHint("run \"maio --help\" to see all commands")
+		return fail(err)
 	}
 }
 
+func fail(err error) int {
+	if err == nil {
+		return 0
+	}
+	errs.Print(os.Stderr, err)
+	logging.Error("command.error", err)
+	return errs.ExitCode(err)
+}
+
+func usagef(format string, args ...any) int {
+	return fail(errs.Newf(errs.Usage, format, args...).WithHint("run \"maio --help\" for usage"))
+}
+
 func cmdInstall(conf *config.Global, args []string) int {
-	var rawURL, root string
+	var rawURL, sha string
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-h", "--help":
-			fmt.Println("usage: maio sudo install <name> [download-root] [--url direct-link-or-local-path]")
+			fmt.Println("usage: sudo maio install <name> [download-root] [--url URL|PATH] [--sha256 HEX]")
+			fmt.Println("       maio install <name> ~/models --url ./model.gguf   (user-owned root, no sudo)")
 			return 0
 		case "--url":
 			if i+1 >= len(args) {
-				return usage("--url requires a value")
+				return usagef("--url requires a value")
 			}
 			i++
 			rawURL = args[i]
+		case "--sha256":
+			if i+1 >= len(args) {
+				return usagef("--sha256 requires a 64-character hex value")
+			}
+			i++
+			sha = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(args[i]), "sha256:"))
 		default:
 			if strings.HasPrefix(args[i], "-") {
-				return usage("unknown argument %s", args[i])
+				return usagef("unknown argument %s", args[i])
 			}
 			pos = append(pos, args[i])
 		}
 	}
 	if len(pos) == 0 {
-		return usage("missing model name, e.g. maio sudo install deepseek-v4.1 /data/models")
+		return usagef("missing model name, e.g. sudo maio install deepseek-v4.1 /data/models")
 	}
 	if len(pos) > 2 {
-		return usage("too many arguments")
+		return usagef("too many arguments")
+	}
+	if sha != "" {
+		if len(sha) != 64 || strings.Trim(sha, "0123456789abcdef") != "" {
+			return fail(errs.New(errs.Usage, "--sha256 must be 64 hexadecimal characters").
+				WithHint("copy the SHA-256 published by the model source, or omit --sha256"))
+		}
 	}
 	name, err := naming.Normalize(pos[0])
 	if err != nil {
-		return fail(2, "%v", err)
+		return fail(err)
 	}
-	root = conf.ModelsRoot
+	root := conf.ModelsRoot
 	if len(pos) == 2 {
 		root = pos[1]
 	}
 	if root == "" || !filepath.IsAbs(root) {
-		return fail(2, "download root must be an absolute path: %q", root)
+		return fail(errs.Newf(errs.Usage, "download root must be an absolute path: %q", root).
+			WithHint("example: sudo maio install %s /data/models", name))
 	}
-	if err := ensureWritableRoot(root); err != nil {
-		return fail(5, "%v", err)
+	if err := ensureWritableRoot(root, name); err != nil {
+		return fail(err)
 	}
-	if srcPath, ok := localSourcePath(rawURL); ok {
-		return installLocal(name, root, srcPath)
+	dir := config.ModelDir(root, name)
+	if _, err := os.Stat(config.ModelConfigPath(dir)); err == nil {
+		return fail(errs.Newf(errs.Conflict, "model %s is already installed in %s", name, dir).
+			WithHint("use maio show %s, or remove it first with maio rm %s", name, name))
 	}
-	if rawURL == "" {
-		idx, err := index.Load()
+	if rawURL != "" {
+		kind, localPath, remoteURL, err := classifySource(rawURL)
 		if err != nil {
-			return fail(2, "%v", err)
+			return fail(err)
 		}
-		u, ok := idx.URL(name)
-		if !ok {
-			return fail(3, "model %s is not in the index: pass --url, or add a line to index.toml", name)
+		if kind == "local" {
+			return installLocal(conf, name, root, localPath, sha)
 		}
-		rawURL = u
+		return installRemote(conf, name, root, remoteURL, sha)
 	}
-	filename := fileNameFromURL(rawURL)
-	if filename == "" {
+	idx, err := index.Load()
+	if err != nil {
+		return fail(err)
+	}
+	u, ok := idx.URL(name)
+	if !ok {
+		return fail(errs.Newf(errs.NotFound, "model %s is not in the index", name).
+			WithHint("pass --url with a direct link or a local GGUF path, or add the model to %s", index.PathCandidates()[0]))
+	}
+	return installRemote(conf, name, root, u, sha)
+}
+
+// classifySource decides whether --url is a remote URL or a local model file.
+func classifySource(raw string) (kind, localPath, remoteURL string, err error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", "", errs.New(errs.Usage, "--url is empty")
+	}
+	if strings.HasPrefix(raw, "file://") {
+		u, perr := url.Parse(raw)
+		if perr != nil || (u.Host != "" && u.Host != "localhost") {
+			return "", "", "", errs.Newf(errs.Usage, "unsupported file URL: %s", raw).
+				WithHint("use file:///absolute/path.gguf or a plain absolute path")
+		}
+		return "local", expandHome(u.Path), "", nil
+	}
+	if strings.Contains(raw, "://") {
+		u, perr := url.Parse(raw)
+		if perr != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return "", "", "", errs.Newf(errs.Usage, "unsupported URL: %s", raw).
+				WithHint("use http://, https://, file:// or a local path")
+		}
+		return "remote", "", raw, nil
+	}
+	if strings.HasPrefix(raw, "~/") {
+		return "local", expandHome(raw), "", nil
+	}
+	if filepath.IsAbs(raw) || strings.HasPrefix(raw, "./") || strings.HasPrefix(raw, "../") {
+		abs, aerr := filepath.Abs(raw)
+		if aerr != nil {
+			return "", "", "", errs.Wrap(errs.Usage, aerr, "invalid path %s", raw)
+		}
+		return "local", abs, "", nil
+	}
+	if st, serr := os.Stat(raw); serr == nil && !st.IsDir() {
+		abs, _ := filepath.Abs(raw)
+		return "local", abs, "", nil
+	}
+	if strings.HasSuffix(strings.ToLower(raw), ".gguf") || strings.ContainsAny(raw, `/\`) {
+		return "local", raw, "", nil
+	}
+	return "", "", "", errs.Newf(errs.Usage, "--url value %q is neither an http(s) URL nor a local path", raw).
+		WithHint("example: --url https://example.com/model.gguf  or  --url /data/models/model.gguf")
+}
+
+func expandHome(p string) string {
+	if strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
+}
+
+func installRemote(conf *config.Global, name, root, rawURL, sha string) int {
+	filename := download.FileNameFromURL(rawURL)
+	if filename == "" || !strings.HasSuffix(strings.ToLower(filename), ".gguf") {
 		filename = name + ".gguf"
 	}
 	dir := config.ModelDir(root, name)
 	if err := prepareInstallDir(dir); err != nil {
-		return fail(4, "%v", err)
+		return fail(err)
 	}
 	dest := filepath.Join(dir, filename)
-	sha, _ := fetchSidecarSHA(rawURL)
+	if sha == "" {
+		sidecar, serr := fetchSidecarSHA(rawURL)
+		if serr != nil {
+			fmt.Fprintf(os.Stderr, "maio: warning: no checksum sidecar found for %s; SHA-256 verification will be skipped\n", rawURL)
+			logging.Warn("install.sha256_missing", "url", rawURL, "error", serr.Error())
+		} else {
+			sha = sidecar
+		}
+	}
+	if remote := download.RemoteSize(context.Background(), nil, rawURL); remote > 0 {
+		if err := download.EnsureSpace(dir, uint64(remote)); err != nil {
+			return fail(err)
+		}
+	}
 	fmt.Printf("installing %s\n  source %s\n  target %s\n", name, rawURL, dest)
-	if err := download.Fetch(context.Background(), download.Options{
+	logging.Info("install.start", "model", name, "source", rawURL, "dest", dest, "root", root, "sha256", sha)
+	start := time.Now()
+	ctx, stop := signalContext()
+	defer stop()
+	if err := download.Fetch(ctx, download.Options{
 		URL:          rawURL,
 		DestPath:     dest,
 		ExpectSHA256: sha,
 		Log:          os.Stdout,
 	}); err != nil {
-		return fail(6, "%v", err)
+		logging.Error("install.failed", err, "model", name, "source", rawURL, "dest", dest)
+		return fail(err)
+	}
+	if err := validateGGUF(dest); err != nil {
+		logging.Error("install.invalid_gguf", err, "model", name, "dest", dest)
+		_ = os.Remove(dest)
+		return fail(err)
 	}
 	if err := config.SaveModel(dir, name, "gguf", filename); err != nil {
-		return fail(5, "failed to write maio.toml: %v", err)
+		_ = os.Remove(dest)
+		return fail(errs.Wrap(errs.IO, err, "the model was downloaded but maio.toml could not be written").
+			WithHint("fix the directory permissions and rerun; the incomplete file was removed"))
+	}
+	st, _ := os.Stat(dest)
+	var size int64
+	if st != nil {
+		size = st.Size()
 	}
 	fmt.Printf("done: %s\nnext: maio run %s\n", config.ModelConfigPath(dir), name)
+	logging.Info("install.done", "model", name, "source", rawURL, "dest", dest,
+		"bytes", size, "sha256", sha, "duration_ms", time.Since(start).Milliseconds())
 	return 0
 }
 
-// localSourcePath reports whether --url is a local path (absolute, ./, ../ or file://).
-func localSourcePath(raw string) (string, bool) {
-	if raw == "" {
-		return "", false
-	}
-	p := raw
-	local := false
-	if strings.HasPrefix(p, "file://") {
-		p = strings.TrimPrefix(p, "file://")
-		local = true
-	}
-	if !local && !(strings.HasPrefix(p, "/") || strings.HasPrefix(p, "./") || strings.HasPrefix(p, "../")) {
-		return "", false
-	}
-	if strings.HasPrefix(p, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			p = filepath.Join(home, p[2:])
-		}
-	}
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return "", false
-	}
-	return abs, true
-}
-
-// installLocal registers an existing local GGUF: in place if it is already inside the model directory, otherwise hardlink or copy.
-func installLocal(name, root, src string) int {
+func installLocal(conf *config.Global, name, root, src, sha string) int {
 	st, err := os.Stat(src)
 	if err != nil {
-		return fail(3, "local file is not readable: %v", err)
+		return fail(errs.Newf(errs.NotFound, "local model is not readable: %s", src).
+			WithHint("check the path and file permissions"))
 	}
 	if !st.Mode().IsRegular() {
-		return fail(3, "local source is not a regular file: %s", src)
+		return fail(errs.Newf(errs.Usage, "local source is not a regular file: %s", src))
 	}
 	dir := config.ModelDir(root, name)
 	if _, err := os.Stat(config.ModelConfigPath(dir)); err == nil {
-		return fail(4, "model %s is already registered (%s exists)", name, config.ModelConfigPath(dir))
+		return fail(errs.Newf(errs.Conflict, "model %s is already registered in %s", name, dir).
+			WithHint("use maio show %s, or remove it first with maio rm %s", name, name))
 	}
 	rel, relErr := filepath.Rel(dir, src)
 	inPlace := relErr == nil && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, "..")
-
+	logging.Info("install.local.start", "model", name, "source", src, "root", root, "in_place", inPlace)
 	if inPlace {
-		if err := download.VerifyMagic(src); err != nil {
-			return fail(7, "verification failed: %v", err)
+		if err := validateLocal(src, sha); err != nil {
+			return fail(err)
 		}
 		if err := config.SaveModel(dir, name, "gguf", filepath.ToSlash(rel)); err != nil {
-			return fail(5, "failed to write maio.toml: %v", err)
+			return fail(err)
 		}
 		fmt.Printf("registered %s in place (no copy)\n  config %s\n", name, config.ModelConfigPath(dir))
+		logging.Info("install.local.done", "model", name, "source", src, "mode", "in-place", "bytes", st.Size())
 		return 0
 	}
-
 	if err := prepareInstallDir(dir); err != nil {
-		return fail(4, "%v", err)
+		return fail(err)
 	}
 	dest := filepath.Join(dir, filepath.Base(src))
 	fmt.Printf("registering %s\n  source %s\n  target %s\n", name, src, dest)
-	if err := download.CopyLocal(src, dest, os.Stdout); err != nil {
-		return fail(5, "%v", err)
+	mode, err := download.CopyLocal(src, dest, os.Stdout)
+	if err != nil {
+		logging.Error("install.local.failed", err, "model", name, "source", src)
+		return fail(err)
 	}
-	if err := download.VerifyMagic(dest); err != nil {
-		return fail(7, "verification failed: %v", err)
+	if err := validateLocal(dest, sha); err != nil {
+		_ = os.Remove(dest)
+		return fail(err)
 	}
 	if err := config.SaveModel(dir, name, "gguf", filepath.Base(src)); err != nil {
-		return fail(5, "failed to write maio.toml: %v", err)
+		_ = os.Remove(dest)
+		return fail(errs.Wrap(errs.IO, err, "the model was copied but maio.toml could not be written").
+			WithHint("fix the directory permissions and rerun; the incomplete file was removed"))
 	}
-	fmt.Printf("done: %s\n", config.ModelConfigPath(dir))
+	fmt.Printf("done: %s\nnext: maio run %s\n", config.ModelConfigPath(dir), name)
+	logging.Info("install.local.done", "model", name, "source", src, "dest", dest, "mode", mode, "bytes", st.Size())
 	return 0
 }
 
-func cmdList(conf *config.Global) int {
+func validateLocal(path, sha string) error {
+	if sha != "" {
+		if err := download.Verify(path, sha); err != nil {
+			return err
+		}
+	} else if err := download.VerifyMagic(path); err != nil {
+		return err
+	}
+	return validateGGUF(path)
+}
+
+func validateGGUF(path string) error {
+	if _, err := gguf.Read(path); err != nil {
+		return err
+	}
+	return nil
+}
+
+func prepareInstallDir(dir string) error {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+				return errs.Wrap(errs.Permission, mkErr, "cannot create model directory %s", dir).
+					WithHint("check permissions, or choose another download root")
+			}
+			return nil
+		}
+		return errs.Wrap(errs.Permission, err, "cannot read model directory %s", dir)
+	}
+	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".part") || e.Name() == "maio.toml" {
+			continue
+		}
+		return errs.Newf(errs.Conflict, "directory is not empty: %s", dir).
+			WithHint("rename or remove it, or pass another download root")
+	}
+	return nil
+}
+
+func ensureWritableRoot(root, name string) error {
+	if os.Geteuid() == 0 {
+		return nil
+	}
+	systemLike := false
+	for _, prefix := range []string{"/var/", "/etc/", "/usr/", "/opt/", "/root/", "/srv/"} {
+		if strings.HasPrefix(root, prefix) {
+			systemLike = true
+			break
+		}
+	}
+	if systemLike {
+		return errs.Newf(errs.Permission, "installing to %s requires root", root).
+			WithHint("use: sudo maio install %s %s", name, root)
+	}
+	fmt.Fprintf(os.Stderr, "maio: note: %s is user-owned; writing as the current user\n", root)
+	return nil
+}
+
+func fetchSidecarSHA(rawURL string) (string, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(rawURL + ".sha256")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) == 0 {
+		return "", fmt.Errorf("empty checksum file")
+	}
+	sum := strings.ToLower(strings.TrimPrefix(fields[0], "sha256:"))
+	if len(sum) != 64 || strings.Trim(sum, "0123456789abcdef") != "" {
+		return "", fmt.Errorf("malformed checksum")
+	}
+	return sum, nil
+}
+
+func cmdList(conf *config.Global, args []string) int {
+	asJSON := false
+	wide := false
+	for _, a := range args {
+		switch a {
+		case "-h", "--help":
+			fmt.Println("usage: maio list [--json] [--wide]")
+			return 0
+		case "--json":
+			asJSON = true
+		case "--wide":
+			wide = true
+		default:
+			return usagef("unknown argument %s", a)
+		}
+	}
 	entries, warns := registry.Scan(conf.ModelsRoot)
 	for _, w := range warns {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", w)
+		if errs.IsCode(w, errs.Permission) || errs.IsCode(w, errs.IO) {
+			return fail(w)
+		}
+		fmt.Fprintf(os.Stderr, "maio: warning: %v\n", w)
+		logging.Warn("registry.warning", "error", w.Error())
 	}
-	if len(entries) == 0 {
-		fmt.Printf("(no models yet; download root is %s)\n", conf.ModelsRoot)
+	type row struct {
+		Name    string `json:"name"`
+		Format  string `json:"format"`
+		Size    int64  `json:"size"`
+		Context uint32 `json:"context_length,omitempty"`
+		Quant   string `json:"quantization,omitempty"`
+		Vision  bool   `json:"vision"`
+		Missing bool   `json:"missing"`
+	}
+	rows := make([]row, 0, len(entries))
+	for _, e := range entries {
+		r := row{Name: e.Model.Name, Format: e.Model.Format, Size: e.Size, Missing: e.Missing}
+		if wide && !e.Missing {
+			if info, err := gguf.Read(e.Model.FilePath()); err == nil {
+				r.Context = info.ContextLength
+				r.Quant = info.Quant
+				r.Vision = info.Vision
+			} else {
+				r.Quant = "?"
+			}
+		}
+		rows = append(rows, r)
+	}
+	if asJSON {
+		_ = json.NewEncoder(os.Stdout).Encode(rows)
+		return 0
+	}
+	if len(rows) == 0 {
+		fmt.Printf("(no models installed; models_root is %s)\n", conf.ModelsRoot)
+		return 0
+	}
+	if wide {
+		fmt.Printf("%-24s %-8s %10s %10s %-9s %-4s\n", "NAME", "FORMAT", "SIZE", "CONTEXT", "QUANT", "VIS")
+		for _, r := range rows {
+			status := "-"
+			if r.Missing {
+				status = "MISSING"
+			}
+			ctx := "-"
+			if r.Context > 0 {
+				ctx = strconv.FormatUint(uint64(r.Context), 10)
+			}
+			fmt.Printf("%-24s %-8s %10s %10s %-9s %-4s", r.Name, r.Format, humanSize(r.Size), ctx, r.Quant, boolYes(r.Vision))
+			if status != "-" {
+				fmt.Printf(" %s", status)
+			}
+			fmt.Println()
+		}
 		return 0
 	}
 	fmt.Printf("%-24s %-8s %10s\n", "NAME", "FORMAT", "SIZE")
-	for _, e := range entries {
-		fmt.Printf("%-24s %-8s %10s\n", e.Model.Name, e.Model.Format, humanSize(e.Size))
+	for _, r := range rows {
+		size := humanSize(r.Size)
+		if r.Missing {
+			size = "MISSING"
+		}
+		fmt.Printf("%-24s %-8s %10s\n", r.Name, r.Format, size)
 	}
 	return 0
 }
 
 func cmdShow(conf *config.Global, args []string) int {
-	if len(args) != 1 {
-		return usage("usage: maio show <name>")
+	asJSON := false
+	var pos []string
+	for _, a := range args {
+		switch a {
+		case "-h", "--help":
+			fmt.Println("usage: maio show <name> [--json]")
+			return 0
+		case "--json":
+			asJSON = true
+		default:
+			if strings.HasPrefix(a, "-") {
+				return usagef("unknown argument %s", a)
+			}
+			pos = append(pos, a)
+		}
 	}
-	md, err := registry.Find(conf.ModelsRoot, args[0])
+	if len(pos) != 1 {
+		return usagef("usage: maio show <name>")
+	}
+	md, err := registry.Find(conf.ModelsRoot, pos[0])
 	if err != nil {
-		return fail(3, "%v", err)
+		return fail(err)
 	}
 	fp := md.FilePath()
 	st, statErr := os.Stat(fp)
-	fmt.Printf("name   : %s\n", md.Name)
-	fmt.Printf("format : %s\n", md.Format)
-	fmt.Printf("path   : %s\n", fp)
-	fmt.Printf("config : %s\n", config.ModelConfigPath(md.Dir))
-	if statErr != nil {
-		fmt.Printf("file   : missing (%v)\n", statErr)
-		return 7
+	record := map[string]any{
+		"name":   md.Name,
+		"format": md.Format,
+		"path":   fp,
+		"config": config.ModelConfigPath(md.Dir),
 	}
-	fmt.Printf("size   : %s\n", humanSize(st.Size()))
+	if statErr != nil {
+		record["missing"] = true
+		if asJSON {
+			_ = json.NewEncoder(os.Stdout).Encode(record)
+		} else {
+			fmt.Printf("name   : %s\nformat : %s\npath   : %s\nconfig : %s\nfile   : missing (%v)\n",
+				md.Name, md.Format, fp, config.ModelConfigPath(md.Dir), statErr)
+		}
+		if os.IsPermission(statErr) {
+			return fail(errs.Wrap(errs.Permission, statErr, "cannot read model file %s", fp).
+				WithHint("check file permissions, or run with sudo"))
+		}
+		return fail(errs.Newf(errs.NotFound, "model file is missing: %s", fp).
+			WithHint("run maio rm %s, then install it again", md.Name))
+	}
+	record["size"] = st.Size()
+	info, ggufErr := gguf.Read(fp)
+	if ggufErr == nil {
+		record["context_length"] = info.ContextLength
+		record["quantization"] = info.Quant
+		record["architecture"] = info.Architecture
+		record["vision"] = info.Vision
+		if mm := findMMProj(md.Dir, fp); mm != "" {
+			record["mmproj"] = mm
+		}
+		hw := hardware.Detect(conf.ModelsRoot)
+		extra := mmprojSize(md.Dir, fp)
+		budget := vram.Estimate(info, st.Size()+extra, conf.CtxSize, hw)
+		record["vram_total"] = budget.Total
+		record["vram_free"] = budget.Free
+		record["vram_fits"] = budget.Fits()
+	}
+	if asJSON {
+		if ggufErr != nil {
+			record["gguf_error"] = ggufErr.Error()
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(record)
+		if ggufErr != nil {
+			return 7
+		}
+		return 0
+	}
+	fmt.Printf("name        : %s\nformat      : %s\npath        : %s\nconfig      : %s\nsize        : %s\n",
+		md.Name, md.Format, fp, config.ModelConfigPath(md.Dir), humanSize(st.Size()))
+	if ggufErr != nil {
+		fmt.Printf("gguf        : invalid (%v)\n", ggufErr)
+		return fail(ggufErr)
+	}
+	mm := findMMProj(md.Dir, fp)
+	fmt.Printf("architecture: %s\ncontext     : %d\nquantization: %s\nvision      : %s\n",
+		info.Architecture, info.ContextLength, info.Quant, boolYes(info.Vision))
+	if mm != "" {
+		fmt.Printf("mmproj      : %s\n", mm)
+	}
+	hw := hardware.Detect(conf.ModelsRoot)
+	extra := mmprojSize(md.Dir, fp)
+	budget := vram.Estimate(info, st.Size()+extra, conf.CtxSize, hw)
+	fmt.Printf("gpu budget  : %s\n", budget.Summary())
+	if hw.HasGPU() && !budget.Fits() {
+		fmt.Printf("              does not fit; %s\n", budget.Suggestion("--ctx"))
+	}
 	return 0
 }
 
@@ -316,72 +640,138 @@ func cmdRm(conf *config.Global, args []string) int {
 			fmt.Println("usage: maio rm <name> [-y]")
 			return 0
 		case strings.HasPrefix(a, "-"):
-			return usage("unknown argument %s", a)
+			return usagef("unknown argument %s", a)
 		default:
 			pos = append(pos, a)
 		}
 	}
 	if len(pos) != 1 {
-		return usage("usage: maio rm <name> [-y]")
+		return usagef("usage: maio rm <name> [-y]")
 	}
 	md, err := registry.Find(conf.ModelsRoot, pos[0])
 	if err != nil {
-		return fail(3, "%v", err)
+		return fail(err)
+	}
+	inst, instErr := engine.New(conf).Get(md.Name)
+	if instErr != nil {
+		return fail(instErr)
+	}
+	if inst != nil {
+		return fail(errs.Newf(errs.Conflict, "model %s is loaded (pid %d)", md.Name, inst.PID).
+			WithHint("unload it first with: maio stop %s", md.Name))
 	}
 	info, err := os.Stat(md.Dir)
-	if err != nil || !info.IsDir() {
-		return fail(3, "invalid model directory: %s", md.Dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fail(errs.Newf(errs.NotFound, "model directory does not exist: %s", md.Dir))
+		}
+		if os.IsPermission(err) {
+			return fail(errs.Wrap(errs.Permission, err, "cannot access model directory %s", md.Dir).
+				WithHint("run with sudo, or fix the directory permissions"))
+		}
+		return fail(errs.Wrap(errs.IO, err, "cannot access model directory %s", md.Dir))
 	}
+	if !info.IsDir() {
+		return fail(errs.Newf(errs.IO, "model path is not a directory: %s", md.Dir))
+	}
+	var size int64
+	_ = filepath.Walk(md.Dir, func(_ string, fi os.FileInfo, err error) error {
+		if err == nil && fi != nil && fi.Mode().IsRegular() {
+			size += fi.Size()
+		}
+		return nil
+	})
 	if !yes {
-		fmt.Printf("delete %s and its model files? [y/N] ", md.Name)
+		if !isTerminal(os.Stdin) {
+			return fail(errs.New(errs.Usage, "confirmation is required in a non-interactive session").
+				WithHint("pass -y to delete %s without prompting", md.Name))
+		}
+		fmt.Printf("delete %s (%s) and all of its files? [y/N] ", md.Name, humanSize(size))
 		var answer string
 		_, _ = fmt.Scanln(&answer)
 		if strings.ToLower(strings.TrimSpace(answer)) != "y" {
 			fmt.Println("cancelled")
+			logging.Info("uninstall.cancelled", "model", md.Name)
 			return 0
 		}
 	}
+	logging.Info("uninstall.start", "model", md.Name, "path", md.Dir, "bytes", size)
 	if err := os.RemoveAll(md.Dir); err != nil {
-		return fail(5, "%v", err)
+		logging.Error("uninstall.failed", err, "model", md.Name, "path", md.Dir)
+		return fail(errs.Wrap(errs.Permission, err, "cannot delete %s", md.Dir).
+			WithHint("check permissions, or run: sudo maio rm %s", md.Name))
+	}
+	if filepath.IsAbs(md.Path) && !pathWithin(md.Dir, md.Path) {
+		fmt.Fprintf(os.Stderr, "maio: warning: the model file is outside the model directory and was not deleted: %s\n", md.Path)
 	}
 	fmt.Printf("deleted %s\n", md.Dir)
+	logging.Info("uninstall.done", "model", md.Name, "path", md.Dir, "bytes", size)
 	return 0
 }
 
+func pathWithin(dir, p string) bool {
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func cmdRun(conf *config.Global, args []string) int {
+	ctxLen := 0
+	force := false
 	var pos []string
-	for _, a := range args {
-		switch {
-		case a == "-h" || a == "--help":
-			fmt.Println("usage: maio run <name> [prompt]")
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-h", "--help":
+			fmt.Println("usage: maio run <name> [prompt] [--ctx N] [--force]")
 			return 0
-		case strings.HasPrefix(a, "-"):
-			return usage("unknown argument %s", a)
+		case "--ctx":
+			if i+1 >= len(args) {
+				return usagef("--ctx requires a positive integer")
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 1 {
+				return usagef("invalid --ctx value %q", args[i])
+			}
+			ctxLen = n
+		case "--force":
+			force = true
 		default:
-			pos = append(pos, a)
+			if strings.HasPrefix(args[i], "-") {
+				return usagef("unknown argument %s", args[i])
+			}
+			pos = append(pos, args[i])
 		}
 	}
 	if len(pos) == 0 {
-		return usage("usage: maio run <name> [prompt]")
+		return usagef("usage: maio run <name> [prompt]")
 	}
 	md, err := registry.Find(conf.ModelsRoot, pos[0])
 	if err != nil {
-		return fail(3, "%v", err)
+		return fail(err)
 	}
+	ctx, stop := signalContext()
+	defer stop()
 	eng := engine.New(conf)
-	inst, err := eng.Ensure(context.Background(), md)
+	inst, err := eng.Ensure(ctx, md, engine.Options{Ctx: ctxLen, Force: force})
 	if err != nil {
-		return fail(8, "%v", err)
+		if ctx.Err() != nil {
+			return fail(errs.Wrap(errs.Interrupted, ctx.Err(), "interrupted while loading %s", md.Name))
+		}
+		return fail(err)
 	}
 	defer func() {
 		if err := eng.Stop(md.Name); err != nil {
-			fmt.Fprintf(os.Stderr, "note: failed to stop engine: %v\n", err)
+			fmt.Fprintf(os.Stderr, "maio: warning: failed to stop the engine: %v\n", err)
+			logging.Warn("engine.stop_failed", "model", md.Name, "error", err.Error())
 		}
 	}()
-
+	logging.Info("run.start", "model", md.Name, "port", inst.Port, "pid", inst.PID)
 	if prompt := strings.Join(pos[1:], " "); prompt != "" {
-		_, code := chatStream(inst.Port, md.Name, []chatMessage{{Role: "user", Content: prompt}})
-		return code
+		_, err := chatStream(ctx, inst.Port, md.Name, []chatMessage{{Role: "user", Content: prompt}})
+		if err != nil {
+			return fail(err)
+		}
+		return 0
 	}
 	fmt.Printf("chatting with %s (type exit to quit)\n", md.Name)
 	var history []chatMessage
@@ -400,9 +790,9 @@ func cmdRun(conf *config.Global, args []string) int {
 			return 0
 		}
 		history = append(history, chatMessage{Role: "user", Content: line})
-		reply, code := chatStream(inst.Port, md.Name, history)
-		if code != 0 {
-			return code
+		reply, err := chatStream(ctx, inst.Port, md.Name, history)
+		if err != nil {
+			return fail(err)
 		}
 		history = append(history, chatMessage{Role: "assistant", Content: reply})
 	}
@@ -413,24 +803,37 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
-func chatStream(port int, model string, msgs []chatMessage) (string, int) {
+var chatClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ResponseHeaderTimeout: 120 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+	},
+}
+
+func chatStream(ctx context.Context, port int, model string, msgs []chatMessage) (string, error) {
 	payload, err := json.Marshal(map[string]any{"model": model, "messages": msgs, "stream": true})
 	if err != nil {
-		return "", fail(8, "failed to build request: %v", err)
+		return "", errs.Wrap(errs.Internal, err, "cannot build the chat request")
 	}
-	req, err := http.NewRequest(http.MethodPost,
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		fmt.Sprintf("http://127.0.0.1:%d/v1/chat/completions", port), bytes.NewReader(payload))
 	if err != nil {
-		return "", fail(8, "%v", err)
+		return "", errs.Wrap(errs.Internal, err, "cannot build the chat request")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{}).Do(req)
+	resp, err := chatClient.Do(req)
 	if err != nil {
-		return "", fail(8, "failed to reach engine: %v", err)
+		if ctx.Err() != nil {
+			return "", errs.Wrap(errs.Interrupted, ctx.Err(), "chat interrupted")
+		}
+		return "", errs.Wrap(errs.Engine, err, "cannot reach the engine on 127.0.0.1:%d", port).
+			WithHint("check the engine log with: maio logs --tail 50")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fail(8, "engine returned HTTP %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", errs.Newf(errs.Engine, "engine returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var reply strings.Builder
 	sc := bufio.NewScanner(resp.Body)
@@ -464,9 +867,12 @@ func chatStream(port int, model string, msgs []chatMessage) (string, int) {
 	}
 	fmt.Println()
 	if err := sc.Err(); err != nil {
-		return reply.String(), fail(8, "failed to read stream: %v", err)
+		if ctx.Err() != nil {
+			return reply.String(), errs.Wrap(errs.Interrupted, ctx.Err(), "chat interrupted")
+		}
+		return reply.String(), errs.Wrap(errs.Engine, err, "failed to read the chat stream")
 	}
-	return reply.String(), 0
+	return reply.String(), nil
 }
 
 func cmdServe(conf *config.Global, args []string) int {
@@ -478,64 +884,166 @@ func cmdServe(conf *config.Global, args []string) int {
 			return 0
 		case "--host":
 			if i+1 >= len(args) {
-				return usage("--host requires a value")
+				return usagef("--host requires a value")
 			}
 			i++
 			host = args[i]
 		case "--port":
 			if i+1 >= len(args) {
-				return usage("--port requires a value")
+				return usagef("--port requires a value")
 			}
 			i++
 			p, err := strconv.Atoi(args[i])
 			if err != nil || p < 1 || p > 65535 {
-				return usage("invalid port: %s", args[i])
+				return usagef("invalid port: %s", args[i])
 			}
 			port = p
 		default:
-			return usage("unknown argument %s", args[i])
+			return usagef("unknown argument %s", args[i])
 		}
 	}
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	srv := server.New(conf, engine.New(conf), Version)
-	fmt.Printf("maio service started at http://%s\n", addr)
-	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
-		return fail(4, "failed to start service: %v", err)
+	if strings.TrimSpace(host) == "" {
+		return usagef("--host must not be empty")
 	}
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		if port < 1024 && os.Geteuid() != 0 {
+			return fail(errs.Wrap(errs.Permission, err, "cannot listen on %s", addr).
+				WithHint("ports below 1024 require root: sudo maio serve --port %d", port))
+		}
+		return fail(errs.Wrap(errs.Service, err, "cannot listen on %s", addr).
+			WithHint("the port may be in use; choose another one with --port, or check with: ss -ltnp"))
+	}
+	ctx, stop := signalContext()
+	defer stop()
+	srv := server.New(conf, engine.New(conf), Version)
+	httpSrv := &http.Server{
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	stopIdle := srv.StartIdleUnloader(ctx, server.IdleUnload)
+	defer stopIdle()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			logging.Warn("serve.shutdown_failed", "error", err.Error())
+		}
+	}()
+	fmt.Printf("maio service started at http://%s (pid %d)\n", addr, os.Getpid())
+	logging.Info("serve.start", "addr", addr, "pid", os.Getpid(), "version", Version,
+		"models_root", conf.ModelsRoot)
+	err = httpSrv.Serve(ln)
+	if err != nil && err != http.ErrServerClosed {
+		logging.Error("serve.failed", errs.Wrap(errs.Service, err, "service failed"))
+		return fail(errs.Wrap(errs.Service, err, "service failed on %s", addr))
+	}
+	if err := srv.Eng.StopAll(); err != nil {
+		logging.Warn("serve.stop_engines_failed", "error", err.Error())
+	}
+	fmt.Println("maio service stopped")
+	logging.Info("serve.stop", "addr", addr)
 	return 0
 }
 
-func cmdPs(conf *config.Global) int {
+func cmdPs(conf *config.Global, args []string) int {
+	asJSON := false
+	for _, a := range args {
+		switch a {
+		case "-h", "--help":
+			fmt.Println("usage: maio ps [--json]")
+			return 0
+		case "--json":
+			asJSON = true
+		default:
+			return usagef("unknown argument %s", a)
+		}
+	}
 	eng := engine.New(conf)
 	insts, err := eng.List()
 	if err != nil {
-		return fail(8, "%v", err)
+		return fail(err)
 	}
-	if len(insts) == 0 {
+	type row struct {
+		Name    string `json:"name"`
+		Port    int    `json:"port"`
+		PID     int    `json:"pid"`
+		Status  string `json:"status"`
+		Started string `json:"started"`
+		Error   string `json:"error,omitempty"`
+	}
+	rows := make([]row, 0, len(insts))
+	for _, in := range insts {
+		status := "ok"
+		reason := ""
+		if err := eng.Health(in.Port); err != nil {
+			status = "dead"
+			reason = err.Error()
+			fmt.Fprintf(os.Stderr, "maio: warning: %s is not responding: %v\n", in.Name, err)
+		}
+		rows = append(rows, row{Name: in.Name, Port: in.Port, PID: in.PID, Status: status, Started: in.Started, Error: reason})
+	}
+	if asJSON {
+		_ = json.NewEncoder(os.Stdout).Encode(rows)
+		return 0
+	}
+	if len(rows) == 0 {
 		fmt.Println("(no models loaded)")
 		return 0
 	}
 	fmt.Printf("%-24s %6s %8s %-8s %s\n", "NAME", "PORT", "PID", "STATUS", "STARTED")
-	for _, in := range insts {
-		status := "ok"
-		if eng.Health(in.Port) != nil {
-			status = "dead"
-		}
-		fmt.Printf("%-24s %6d %8d %-8s %s\n", in.Name, in.Port, in.PID, status, in.Started)
+	for _, r := range rows {
+		fmt.Printf("%-24s %6d %8d %-8s %s\n", r.Name, r.Port, r.PID, r.Status, r.Started)
 	}
 	return 0
 }
 
 func cmdStop(conf *config.Global, args []string) int {
-	if len(args) != 1 {
-		return usage("usage: maio stop <name>")
+	all := false
+	var pos []string
+	for _, a := range args {
+		switch {
+		case a == "--all":
+			all = true
+		case a == "-h" || a == "--help":
+			fmt.Println("usage: maio stop <name> | maio stop --all")
+			return 0
+		case strings.HasPrefix(a, "-"):
+			return usagef("unknown argument %s", a)
+		default:
+			pos = append(pos, a)
+		}
 	}
-	name, err := naming.Normalize(args[0])
+	eng := engine.New(conf)
+	if all {
+		fmt.Println("stopping all loaded models")
+		if err := eng.StopAll(); err != nil {
+			return fail(err)
+		}
+		return 0
+	}
+	if len(pos) != 1 {
+		return usagef("usage: maio stop <name>")
+	}
+	name, err := naming.Normalize(pos[0])
 	if err != nil {
-		return fail(2, "%v", err)
+		return fail(err)
 	}
-	if err := engine.New(conf).Stop(name); err != nil {
-		return fail(8, "%v", err)
+	inst, err := eng.Get(name)
+	if err != nil {
+		return fail(err)
+	}
+	if inst == nil {
+		fmt.Printf("model %s is not loaded\n", name)
+		logging.Info("stop.noop", "model", name)
+		return 0
+	}
+	if err := eng.Stop(name); err != nil {
+		return fail(err)
 	}
 	fmt.Printf("stopped %s\n", name)
 	return 0
@@ -543,180 +1051,278 @@ func cmdStop(conf *config.Global, args []string) int {
 
 func cmdBoot(conf *config.Global, args []string) int {
 	dry := false
+	userMode := false
 	value := ""
 	for _, a := range args {
 		switch {
 		case a == "-h" || a == "--help":
-			fmt.Println("usage: maio sudo boot 1|0 [--dry-run]")
+			fmt.Println("usage: sudo maio boot 1|0 [--user] [--dry-run]")
+			fmt.Println("  1 = start on boot, 0 = manual start")
 			return 0
 		case a == "--dry-run":
 			dry = true
+		case a == "--user":
+			userMode = true
 		case strings.HasPrefix(a, "-"):
-			return usage("unknown argument %s", a)
+			return usagef("unknown argument %s", a)
 		default:
 			if value != "" {
-				return usage("too many arguments")
+				return usagef("too many arguments")
 			}
 			value = a
 		}
 	}
 	if value != "1" && value != "0" {
-		return usage("usage: maio sudo boot 1|0 (1=start on boot, 0=manual start)")
+		return usagef("usage: sudo maio boot 1|0 (1=start on boot, 0=manual start)")
 	}
-	conf.Boot = int(value[0] - '0')
+	mode := systemd.System
+	if userMode {
+		mode = systemd.User
+	}
+	boot := 0
+	if value == "1" {
+		boot = 1
+	}
+	confPath := conf.Source
+	if confPath == "" {
+		confPath = config.ConfPath()
+	}
+	if userMode && confPath != config.UserConfPath() {
+		confPath = config.UserConfPath()
+	}
+	exe := installedExe()
+	unitPath := systemd.UnitPath(mode)
 	if dry {
 		action := "enable --now"
-		if value == "0" {
+		if boot == 0 {
 			action = "disable --now"
 		}
-		fmt.Printf("will set boot = %s\n  unit: /etc/systemd/system/maio.service\n  run: systemctl %s maio\n", value, action)
-		return 0
-	}
-	if err := conf.Save(); err != nil {
-		return fail(5, "failed to save global config (root required): %v", err)
-	}
-	if value == "1" {
-		if err := systemd.Enable(installedExe(), config.ConfPath()); err != nil {
-			return fail(5, "%v", err)
+		flag := modeFlag(mode)
+		if flag != "" {
+			flag += " "
 		}
-		fmt.Println("start on boot enabled")
+		fmt.Printf("will set boot = %d\n  config: %s\n  unit: %s\n  run: systemctl %s%s\n",
+			boot, confPath, unitPath, flag, action)
 		return 0
 	}
-	if err := systemd.Disable(); err != nil {
-		return fail(5, "%v", err)
+	if !userMode && os.Geteuid() != 0 {
+		return fail(errs.New(errs.Permission, "the system service requires root").
+			WithHint("use: sudo maio boot %s  (or: maio boot %s --user for a per-user service)", value, value))
 	}
-	fmt.Println("start on boot disabled")
+	conf.Boot = boot
+	var err error
+	if userMode {
+		conf.Source = confPath
+		err = conf.SaveTo(confPath)
+	} else {
+		err = conf.Save()
+	}
+	if err != nil {
+		return fail(err)
+	}
+	logging.Info("boot.save", "boot", boot, "config", confPath, "mode", string(mode))
+	if boot == 1 {
+		if err := systemd.Enable(mode, exe, confPath); err != nil {
+			return fail(err)
+		}
+		st := systemd.Query(mode)
+		if !st.Active {
+			return fail(errs.Newf(errs.Service, "the %s maio service was enabled but is not running", mode).
+				WithHint("inspect it with: journalctl %s -u maio -n 50; or start it manually with: %s serve",
+					modeFlag(mode), exe))
+		}
+		fmt.Printf("start on boot enabled (%s service, active=%v, enabled=%v)\n", mode, st.Active, st.Enabled)
+		logging.Info("boot.enable", "mode", string(mode), "unit", unitPath, "exe", exe)
+		if userMode {
+			user := currentUser()
+			if ok, _ := systemd.Linger(user); !ok {
+				fmt.Fprintf(os.Stderr, "maio: note: the per-user service starts after login; for boot-time start run:\n  %s\n", systemd.LingerHint(user))
+			}
+		}
+		return 0
+	}
+	if err := systemd.Disable(mode); err != nil {
+		return fail(err)
+	}
+	fmt.Printf("start on boot disabled (%s service)\n", mode)
+	logging.Info("boot.disable", "mode", string(mode), "unit", unitPath)
 	return 0
 }
 
-func ensureWritableRoot(root string) error {
-	if os.Geteuid() == 0 {
-		return nil
-	}
-	systemLike := strings.HasPrefix(root, "/var/") ||
-		strings.HasPrefix(root, "/etc/") ||
-		strings.HasPrefix(root, "/usr/") ||
-		strings.HasPrefix(root, "/opt/")
-	if systemLike {
-		return fmt.Errorf("installing to %s requires root, use: maio sudo install ...", root)
-	}
-	fmt.Fprintf(os.Stderr, "note: target %s is not a system path; writing as the current user\n", root)
-	return nil
-}
-
-func prepareInstallDir(dir string) error {
-	ents, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return os.MkdirAll(dir, 0o755)
-		}
-		return err
-	}
-	for _, e := range ents {
-		if strings.HasSuffix(e.Name(), ".part") || e.Name() == "maio.toml" {
-			continue
-		}
-		return fmt.Errorf("directory already exists and is not empty: %s (rename, or pass another download root)", dir)
-	}
-	return nil
-}
-
-func fileNameFromURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	base := path.Base(u.Path)
-	if base == "." || base == "/" || base == "" {
-		return ""
-	}
-	return base
-}
-
-func fetchSidecarSHA(rawURL string) (string, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(rawURL + ".sha256")
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	if err != nil {
-		return "", err
-	}
-	fields := strings.Fields(string(data))
-	if len(fields) == 0 {
-		return "", fmt.Errorf("empty checksum file")
-	}
-	sum := strings.ToLower(strings.TrimPrefix(fields[0], "sha256:"))
-	if len(sum) != 64 {
-		return "", fmt.Errorf("malformed checksum")
-	}
-	return sum, nil
-}
-
 func installedExe() string {
-	if p, err := exec.LookPath("maio"); err == nil {
+	if p, err := os.Executable(); err == nil {
 		return p
 	}
-	if p, err := os.Executable(); err == nil {
+	if p, err := exec.LookPath("maio"); err == nil {
 		return p
 	}
 	return "maio"
 }
 
+func signalContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
+func isTerminal(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	var termios syscall.Termios
+	_, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, f.Fd(), uintptr(syscall.TCGETS), uintptr(unsafe.Pointer(&termios)), 0, 0, 0)
+	return errno == 0
+}
+
+func modeFlag(mode systemd.Mode) string {
+	if mode == systemd.User {
+		return "--user"
+	}
+	return ""
+}
+
+func currentUser() string {
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	if u := os.Getenv("LOGNAME"); u != "" {
+		return u
+	}
+	return "root"
+}
+
+func sanitizeArgs(args []string) string {
+	redacted := make([]string, 0, len(args))
+	hideNext := false
+	for _, a := range args {
+		if hideNext {
+			redacted = append(redacted, stripQuery(a))
+			hideNext = false
+			continue
+		}
+		if a == "--url" || a == "--sha256" {
+			redacted = append(redacted, a)
+			hideNext = true
+			continue
+		}
+		if strings.HasPrefix(a, "--url=") {
+			redacted = append(redacted, "--url="+stripQuery(strings.TrimPrefix(a, "--url=")))
+			continue
+		}
+		redacted = append(redacted, a)
+	}
+	out := strings.Join(redacted, " ")
+	if len(out) > 500 {
+		out = out[:500] + "..."
+	}
+	return out
+}
+
+func stripQuery(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.RawQuery == "" {
+		return raw
+	}
+	u.RawQuery = ""
+	return u.String()
+}
+
+func mmprojSize(dir, modelFile string) int64 {
+	mm := findMMProj(dir, modelFile)
+	if mm == "" {
+		return 0
+	}
+	if st, err := os.Stat(mm); err == nil {
+		return st.Size()
+	}
+	return 0
+}
+
+func findMMProj(dir, modelFile string) string {
+	dir = filepath.Dir(modelFile)
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var cands []string
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".gguf") {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(e.Name()), "mmproj") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if p != modelFile {
+			cands = append(cands, p)
+		}
+	}
+	sort.Strings(cands)
+	if len(cands) == 0 {
+		return ""
+	}
+	return cands[0]
+}
+
 func humanSize(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
+	if n < 0 {
+		return "?"
 	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+	return hardware.HumanBytes(uint64(n))
 }
 
-func usage(format string, a ...any) int {
-	fmt.Fprintf(os.Stderr, "maio: "+format+"\n", a...)
-	return 2
-}
-
-func fail(code int, format string, a ...any) int {
-	fmt.Fprintf(os.Stderr, "maio: "+format+"\n", a...)
-	return code
+func boolYes(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
 }
 
 func printHelp() {
-	fmt.Print(`maio - a lightweight model management CLI built on llama.cpp
+	fmt.Print(`maio - lightweight model management CLI built on llama.cpp
 
-usage: maio [sudo] <command> [args]
+Usage:
+  maio <command> [arguments]
+  sudo maio <command> [arguments]    for system-wide changes
 
-install
-  sudo install maio-cluster                install maio itself
-  maio sudo install <name> [root]     install a model into <root>/<name>/
-  maio sudo install <name> --url URL  install from a direct link
-  maio sudo install <name> --url /abs/x.gguf  register a local model in place
+Models:
+  sudo maio install <name> [root]           install a model into <root>/<name>/
+  sudo maio install <name> [root] --url URL install from a direct link
+  sudo maio install <name> [root] --url /abs/model.gguf
+                                            register an existing local GGUF
+  maio list [--wide]                        list installed models
+  maio show <name>                          show config, file and capabilities
+  maio rm <name> [-y]                       delete a model and its files
+  maio run <name> [prompt] [--ctx N] [--force]
+                                            chat or run one prompt locally
 
-models
-  maio list                           list installed models
-  maio show <name>                    show config and file path
-  maio rm <name>                      delete a model
-  maio run <name> [prompt]            chat / one-shot inference
+Service:
+  maio serve [--host ADDR] [--port N]       start the HTTP service
+  maio ps                                   list loaded models
+  maio stop <name> | --all                  unload model(s) and free VRAM
+  sudo maio boot 1|0 [--user]               start-on-boot switch (default 1)
+  maio boot 1|0 --user                      per-user service (no root)
 
-service
-  maio serve                          start the LAN service
-  maio ps                             list loaded models
-  maio stop <name>                    unload a model and free VRAM
+Diagnostics:
+  maio doctor [--json]                      check config, hardware, engine, models
+  maio logs [--tail N] [--json] [--path]    read the audit log
+  maio version [--json]                     print version and paths
 
-system
-  maio sudo boot 1|0                  start on boot: 1=on, 0=off
-  maio version                        print version
+Install maio itself:
+  sudo apt install maio-cluster              from the packaged repository
+  sudo bash maio-cluster                     from a source checkout
 
-note: model names are lowercase; spaces become - (DeepSeek v4.1 -> deepseek-v4.1)
+Environment:
+  MAIO_CONF   global config path (default /etc/maio/maio.conf or per-user)
+  MAIO_LOG    audit log path override
+  MAIO_DEBUG  1 = print underlying causes on errors
+  MAIO_LANG   reserved for language packs (English for now)
+
+Exit codes:
+  0 ok, 2 usage, 3 not found, 4 conflict, 5 permission/io, 6 download,
+  7 verification, 8 engine, 9 hardware, 10 config, 11 service, 130 interrupted
+
+Notes:
+  - model names are lowercase; spaces become - (DeepSeek v4.1 -> deepseek-v4.1)
+  - use "sudo maio ...", not "maio sudo ..."
+  - the audit log records installs, downloads, removals and engine actions
 `)
 }

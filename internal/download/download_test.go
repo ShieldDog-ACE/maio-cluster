@@ -93,3 +93,28 @@ func TestVerifyRejectsNonGGUF(t *testing.T) {
 		t.Fatal("non-GGUF file should fail")
 	}
 }
+
+func TestFileNameFromURL(t *testing.T) {
+	cases := map[string]string{
+		"https://example.com/a/model-Q4_K_M.gguf": "model-Q4_K_M.gguf",
+		"https://example.com/a/model.gguf?x=1":    "model.gguf",
+		"https://example.com/download":            "download",
+		"https://example.com/":                    "",
+		"file:///data/model.gguf":                 "model.gguf",
+	}
+	for in, want := range cases {
+		if got := FileNameFromURL(in); got != want {
+			t.Fatalf("FileNameFromURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestEnsureSpace(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureSpace(dir, 1024); err != nil {
+		t.Fatalf("small request should fit: %v", err)
+	}
+	if err := EnsureSpace(dir, 1<<62); err == nil {
+		t.Fatal("impossible request should fail")
+	}
+}

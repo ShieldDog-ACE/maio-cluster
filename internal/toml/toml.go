@@ -1,6 +1,8 @@
 // Package toml is a minimal TOML reader that is just enough for maio:
 // it supports `key = "string"`, `key = integer`, `key = true/false` and # comments.
-// maio configs are flat, and no third-party dependency is pulled in, to stay lightweight.
+// Keys may be bare or quoted. The reader keeps line numbers so configuration
+// errors can point at the exact line. maio configs are flat, and no third-party
+// dependency is pulled in, to stay lightweight.
 package toml
 
 import (
@@ -9,14 +11,19 @@ import (
 	"strings"
 )
 
-// Document holds the parse result; keys are kept verbatim.
+// Document holds the parse result; keys are kept without quotes.
 type Document struct {
 	Values map[string]any
+	Lines  map[string]int
+	Order  []string
 }
 
 // Parse parses TOML text.
 func Parse(data []byte) (*Document, error) {
-	doc := &Document{Values: make(map[string]any)}
+	doc := &Document{
+		Values: make(map[string]any),
+		Lines:  make(map[string]int),
+	}
 	lines := strings.Split(string(data), "\n")
 	for i, raw := range lines {
 		line := strings.TrimSpace(stripComment(raw))
@@ -27,15 +34,20 @@ func Parse(data []byte) (*Document, error) {
 		if eq < 0 {
 			return nil, fmt.Errorf("line %d: missing '='", i+1)
 		}
-		key := strings.TrimSpace(line[:eq])
-		if key == "" {
-			return nil, fmt.Errorf("line %d: empty key", i+1)
+		key, err := parseKey(strings.TrimSpace(line[:eq]))
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", i+1, err)
+		}
+		if first, exists := doc.Lines[key]; exists {
+			return nil, fmt.Errorf("line %d: duplicate key %q (first defined on line %d)", i+1, key, first)
 		}
 		value, err := parseValue(strings.TrimSpace(line[eq+1:]))
 		if err != nil {
 			return nil, fmt.Errorf("line %d: %w", i+1, err)
 		}
 		doc.Values[key] = value
+		doc.Lines[key] = i + 1
+		doc.Order = append(doc.Order, key)
 	}
 	return doc, nil
 }
@@ -62,6 +74,53 @@ func (d *Document) Bool(key string) (bool, bool) {
 func (d *Document) Has(key string) bool {
 	_, ok := d.Values[key]
 	return ok
+}
+
+// Line returns the 1-based source line of a key (0 when absent).
+func (d *Document) Line(key string) int { return d.Lines[key] }
+
+// Keys returns keys in source order.
+func (d *Document) Keys() []string { return append([]string(nil), d.Order...) }
+
+// TypeName describes the stored value type for diagnostics.
+func (d *Document) TypeName(key string) string {
+	v, ok := d.Values[key]
+	if !ok {
+		return "missing"
+	}
+	switch v.(type) {
+	case string:
+		return "string"
+	case int64:
+		return "integer"
+	case bool:
+		return "boolean"
+	default:
+		return fmt.Sprintf("%T", v)
+	}
+}
+
+func parseKey(raw string) (string, error) {
+	if raw == "" {
+		return "", fmt.Errorf("empty key")
+	}
+	if strings.HasPrefix(raw, "\"") {
+		if len(raw) < 2 || !strings.HasSuffix(raw, "\"") {
+			return "", fmt.Errorf("key is missing the closing quote")
+		}
+		key, err := strconv.Unquote(raw)
+		if err != nil {
+			return "", fmt.Errorf("failed to parse key: %w", err)
+		}
+		if key == "" {
+			return "", fmt.Errorf("empty key")
+		}
+		return key, nil
+	}
+	if strings.ContainsAny(raw, " \t") {
+		return "", fmt.Errorf("key %q contains whitespace", raw)
+	}
+	return raw, nil
 }
 
 func stripComment(line string) string {
@@ -122,7 +181,7 @@ func parseValue(raw string) (any, error) {
 	case "false":
 		return false, nil
 	}
-	n, err := strconv.ParseInt(raw, 10, 64)
+	n, err := strconv.ParseInt(strings.ReplaceAll(raw, "_", ""), 10, 64)
 	if err == nil {
 		return n, nil
 	}

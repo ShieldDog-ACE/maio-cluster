@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# maio V1 smoke test: install / list / show / register / delete / API.
-# It uses a temporary directory and a local HTTP source, so no GPU and no real model are needed.
+# maio V2 end-to-end smoke test: install / list / show / register / remove /
+# API / doctor / logs. It uses a temporary directory and a local HTTP source,
+# so no GPU, no root and no real model are required.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,34 +22,61 @@ trap cleanup EXIT
 pass() { printf '  [OK] %s\n' "$1"; }
 fail() { printf '  [FAIL] %s\n' "$1" >&2; exit 1; }
 
+expect_exit() {
+  local want="$1"; shift
+  set +e
+  "$@" >"$TMP/out.log" 2>"$TMP/err.log"
+  local got=$?
+  set -e
+  [ "$got" -eq "$want" ] || { cat "$TMP/out.log" "$TMP/err.log" >&2; fail "expected exit $want, got $got: $*"; }
+}
+
 echo "== 1. fixtures =="
 mkdir -p "$TMP/models" "$TMP/state" "$TMP/etc" "$TMP/fixtures"
 python3 - "$TMP/fixtures/tiny.gguf" <<'FIXTURE'
-import hashlib, sys
-data = b"GGUF" + bytes(range(256)) * 4
-open(sys.argv[1], "wb").write(data)
-open(sys.argv[1] + ".sha256", "w").write(hashlib.sha256(data).hexdigest() + "  tiny.gguf\n")
+import hashlib, struct, sys
+def s(x):
+    b = x.encode()
+    return struct.pack('<Q', len(b)) + b
+def kv_u32(key, value):
+    return s(key) + struct.pack('<I', 4) + struct.pack('<I', value)
+def kv_str(key, value):
+    return s(key) + struct.pack('<I', 8) + s(value)
+out = b'GGUF' + struct.pack('<I', 3) + struct.pack('<Q', 0) + struct.pack('<Q', 9)
+out += kv_str('general.architecture', 'llama')
+out += kv_str('general.name', 'tiny-test')
+out += kv_u32('general.file_type', 15)
+out += kv_u32('llama.context_length', 4096)
+out += kv_u32('llama.block_count', 32)
+out += kv_u32('llama.attention.head_count', 32)
+out += kv_u32('llama.attention.head_count_kv', 8)
+out += kv_u32('llama.embedding_length', 4096)
+out += kv_str('llama.tokenizer.ggml.model', 'gpt2')
+open(sys.argv[1], 'wb').write(out)
+open(sys.argv[1] + '.sha256', 'w').write(hashlib.sha256(out).hexdigest() + '  tiny.gguf\n')
 FIXTURE
-pass "tiny.gguf fixture created"
+pass "tiny GGUF fixture created"
 
 cat > "$TMP/etc/maio.conf" <<EOF
-boot        = 0
+boot        = 1
 models_root = "$TMP/models"
 state_dir   = "$TMP/state"
 host        = "127.0.0.1"
 port        = $API_PORT
-mirror      = "https://www.modelscope.cn"
+mirror      = ""
 llama_bin   = ""
 llama_lib   = ""
 ctx_size    = 0
 EOF
 export MAIO_CONF="$TMP/etc/maio.conf"
 
-echo "== 2. basic commands =="
+echo "== 2. basic commands and the new sudo syntax =="
 "$BIN" version >/dev/null || fail "maio version"
-"$BIN" --help | grep -q "maio sudo install" || fail "help is missing install"
-"$BIN" list | grep -q "no models yet" || fail "empty listing message"
-pass "version / help / list"
+"$BIN" --help | grep -q "sudo maio install" || fail "help is missing sudo maio install"
+expect_exit 2 "$BIN" sudo install x
+grep -q "no longer supported" "$TMP/err.log" || fail "maio sudo migration message missing"
+expect_exit 2 "$BIN" not-a-command
+pass "version / help / maio sudo rejection / unknown command"
 
 echo "== 3. install from a local HTTP source =="
 ( cd "$TMP/fixtures" && exec python3 -m http.server "$HTTP_PORT" >/dev/null 2>&1 ) &
@@ -68,53 +96,108 @@ grep -q 'format = "gguf"' "$TMP/models/deepseek-v4.1/maio.toml" || fail "format 
 [ -f "$TMP/models/deepseek-v4.1/tiny.gguf" ] || fail "model file was not written"
 pass "install + name normalization (DeepSeek v4.1 -> deepseek-v4.1)"
 
-"$BIN" list | grep -q "deepseek-v4.1" || fail "list does not show the model"
-"$BIN" show deepseek-v4.1 | grep -q "format : gguf" || fail "show output is wrong"
-pass "list / show"
+"$BIN" list | grep "deepseek-v4.1" >/dev/null || fail "list does not show the model"
+"$BIN" list --wide | grep "4096" >/dev/null || fail "wide list is missing the context length"
+"$BIN" show deepseek-v4.1 | grep "architecture: llama" >/dev/null || fail "show output is wrong"
+"$BIN" show deepseek-v4.1 | grep "context     : 4096" >/dev/null || fail "show is missing the context"
+pass "list / list --wide / show"
 
-echo "== 3b. local registration (copy / in place / duplicate guard) =="
+echo "== 4. error codes: missing model, duplicate, bad name, bad GGUF =="
+expect_exit 3 "$BIN" show not-installed
+expect_exit 3 "$BIN" run not-installed hi
+expect_exit 2 "$BIN" install "bad\$name" "$TMP/models"
+mkdir -p "$TMP/bad"
+printf 'NOPE' > "$TMP/bad/bad.gguf"
+expect_exit 7 "$BIN" install bad-gguf "$TMP/models" --url "$TMP/bad/bad.gguf"
+grep -q "MAIO-E007" "$TMP/err.log" || fail "verification error code missing"
+expect_exit 6 "$BIN" install missing-url "$TMP/models" --url "http://127.0.0.1:$HTTP_PORT/nope.gguf"
+grep -q "MAIO-E006" "$TMP/err.log" || fail "download error code missing"
+pass "not found / usage / verification / download error codes"
+
+echo "== 5. local registration (copy / in place / duplicate guard) =="
 mkdir -p "$TMP/localcopy"
 cp "$TMP/fixtures/tiny.gguf" "$TMP/localcopy/copy-model.gguf"
 "$BIN" install copy-model "$TMP/models" --url "$TMP/localcopy/copy-model.gguf" >/dev/null || fail "local copy registration"
 [ -f "$TMP/models/copy-model/maio.toml" ] && [ -f "$TMP/models/copy-model/copy-model.gguf" ] || fail "local copy was not placed"
 
-mkdir -p "$TMP/inplace/keep-model"
-cp "$TMP/fixtures/tiny.gguf" "$TMP/inplace/keep-model/x.gguf"
-"$BIN" install keep-model "$TMP/inplace" --url "$TMP/inplace/keep-model/x.gguf" >/dev/null || fail "in-place registration"
-grep -q 'path   = "x.gguf"' "$TMP/inplace/keep-model/maio.toml" || fail "in-place registration did not write a relative path"
+mkdir -p "$TMP/models/keep-model"
+cp "$TMP/fixtures/tiny.gguf" "$TMP/models/keep-model/x.gguf"
+"$BIN" install keep-model "$TMP/models" --url "$TMP/models/keep-model/x.gguf" >/dev/null || fail "in-place registration"
+grep -q 'path   = "x.gguf"' "$TMP/models/keep-model/maio.toml" || fail "in-place registration did not write a relative path"
 
-set +e
-"$BIN" install keep-model "$TMP/inplace" --url "$TMP/inplace/keep-model/x.gguf" >/dev/null 2>&1
-code=$?
-set -e
-[ "$code" -eq 4 ] || fail "duplicate registration should exit 4, got $code"
+expect_exit 4 "$BIN" install keep-model "$TMP/models" --url "$TMP/models/keep-model/x.gguf"
 pass "local registration (copy / in place / duplicate guard)"
 
-echo "== 4. permission policy (non-root install to a system path must fail) =="
-set +e
-"$BIN" install perm-test /var/lib/maio/models --url "http://127.0.0.1:$HTTP_PORT/tiny.gguf" >/dev/null 2>"$TMP/err.log"
-code=$?
-set -e
-[ "$code" -eq 5 ] || fail "non-root install to a system path should exit 5, got $code"
-grep -q "requires root" "$TMP/err.log" || fail "missing permission hint"
-pass "non-root install points at maio sudo install"
+echo "== 6. permission policy (non-root install to a system path must fail) =="
+if [ "$(id -u)" -ne 0 ]; then
+  expect_exit 5 "$BIN" install perm-test /var/lib/maio/models --url "http://127.0.0.1:$HTTP_PORT/tiny.gguf"
+  grep -q "requires root" "$TMP/err.log" || fail "missing permission hint"
+  grep -q "sudo maio install" "$TMP/err.log" || fail "permission hint does not mention sudo maio"
+  pass "non-root install points at sudo maio install"
+else
+  pass "running as root; permission test skipped"
+fi
 
-echo "== 5. service API =="
+echo "== 7. non-interactive confirmation and delete =="
+expect_exit 2 "$BIN" rm deepseek-v4.1 < /dev/null
+"$BIN" rm deepseek-v4.1 -y >/dev/null || fail "rm -y"
+[ ! -d "$TMP/models/deepseek-v4.1" ] || fail "model directory was not deleted"
+"$BIN" list | grep "deepseek-v4.1" >/dev/null && fail "deleted model is still listed"
+pass "rm requires -y in scripts and deletes cleanly"
+
+echo "== 8. service API =="
 "$BIN" serve --port "$API_PORT" >"$TMP/serve.log" 2>&1 &
 API_PID=$!
-for _ in $(seq 1 30); do
+for _ in $(seq 1 50); do
   curl -s -o /dev/null "http://127.0.0.1:$API_PORT/api/version" && break
   sleep 0.2
 done
-curl -s "http://127.0.0.1:$API_PORT/api/version" | grep -q "0.1.0-dev" || fail "/api/version"
-curl -s "http://127.0.0.1:$API_PORT/api/tags" | grep -q "deepseek-v4.1" || fail "/api/tags"
+curl -s "http://127.0.0.1:$API_PORT/api/version" | grep -q "2.0.0" || fail "/api/version"
+curl -s "http://127.0.0.1:$API_PORT/api/tags" | grep -q "copy-model" || fail "/api/tags"
+curl -s "http://127.0.0.1:$API_PORT/api/tags" | grep -q "keep-model" || fail "/api/tags missing keep-model"
 pass "/api/version + /api/tags"
 
-echo "== 6. delete =="
-"$BIN" rm deepseek-v4.1 -y >/dev/null || fail "rm"
-[ ! -d "$TMP/models/deepseek-v4.1" ] || fail "model directory was not deleted"
-"$BIN" list | grep -q "deepseek-v4.1" && fail "deleted model is still listed"
-pass "rm"
+echo "== 9. doctor, logs and version JSON =="
+set +e
+"$BIN" doctor --json >"$TMP/doctor.json" 2>"$TMP/doctor.err"
+DOC=$?
+set -e
+[ "$DOC" -eq 9 ] || fail "doctor should exit 9 when llama-server and the service are missing (got $DOC)"
+python3 - "$TMP/doctor.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["version"], "missing version"
+assert d["summary"]["failure"] >= 1, d["summary"]
+names = {c["name"] for c in d["checks"]}
+for want in ("gpu", "llama-server", "copy-model", "keep-model", "audit log"):
+    assert want in names, (want, names)
+PY
+pass "doctor --json reports hardware, engine, models and logs"
+
+"$BIN" version --json >"$TMP/version.json"
+python3 - "$TMP/version.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["version"].startswith("2.0.0"), d
+assert d["models_root"], d
+PY
+"$BIN" logs --path | grep "maio.log" >/dev/null || fail "logs --path"
+"$BIN" logs --tail 200 | grep "install.done" >/dev/null || fail "install action missing from the audit log"
+"$BIN" logs --tail 200 | grep "uninstall.done" >/dev/null || fail "uninstall action missing from the audit log"
+"$BIN" logs --tail 5 --json | tail -n 1 | python3 -c 'import json,sys; json.loads(sys.stdin.read())' \
+  || fail "logs --json is not JSON"
+pass "version --json / logs / audit actions"
+
+echo "== 10. config errors are reported, not ignored =="
+cp "$TMP/etc/maio.conf" "$TMP/etc/bad.conf"
+printf 'boott = 1\n' >> "$TMP/etc/bad.conf"
+set +e
+MAIO_CONF="$TMP/etc/bad.conf" "$BIN" list >/dev/null 2>"$TMP/badconf.err"
+CODE=$?
+set -e
+[ "$CODE" -eq 10 ] || fail "unknown config key should exit 10 (got $CODE)"
+grep -q "unknown key" "$TMP/badconf.err" || fail "unknown config key was not reported"
+pass "unknown config keys are reported with exit code 10"
 
 echo
 echo "all checks passed"

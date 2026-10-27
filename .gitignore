@@ -3,6 +3,7 @@ llama.cpp-master/
 
 # build output
 bin/
+dist/
 *.exe
 *.o
 *.a

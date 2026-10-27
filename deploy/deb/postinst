@@ -1,0 +1,34 @@
+#!/bin/sh
+# maio-cluster post-install: create runtime directories and start on boot.
+set -e
+
+install -d -m 0755 /var/lib/maio /var/lib/maio/models /var/lib/maio/run /var/lib/maio/log 2>/dev/null || true
+
+if [ "$1" = "configure" ]; then
+    boot=1
+    if [ -f /etc/maio/maio.conf ]; then
+        boot=$(sed -n 's/^[[:space:]]*boot[[:space:]]*=[[:space:]]*//p' /etc/maio/maio.conf | tail -n 1 | tr -d '[:space:]')
+        [ -n "$boot" ] || boot=1
+    fi
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        if [ "$boot" != "0" ]; then
+            if systemctl enable --now maio.service >/dev/null 2>&1; then
+                # On upgrade, replace the running process so the new binary is used.
+                if [ -n "${2:-}" ]; then
+                    systemctl try-restart maio.service >/dev/null 2>&1 || true
+                fi
+                echo "maio: start on boot enabled and service started"
+            else
+                echo "maio: warning: the service could not be started; run: systemctl status maio" >&2
+            fi
+        else
+            # Respect an explicit "maio boot 0" choice.
+            systemctl disable --now maio.service >/dev/null 2>&1 || true
+        fi
+    else
+        echo "maio: warning: systemctl not found; start it manually with: maio serve" >&2
+    fi
+fi
+
+exit 0

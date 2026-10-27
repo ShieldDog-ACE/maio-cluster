@@ -1,0 +1,10 @@
+#!/bin/sh
+# maio-cluster post-remove: reload systemd. Models and logs are user data and
+# are intentionally kept, even on purge.
+set -e
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0

@@ -4,17 +4,18 @@
 package index
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/ShieldDog-ACE/maio-cluster/internal/config"
+	"github.com/ShieldDog-ACE/maio-cluster/internal/errs"
 	"github.com/ShieldDog-ACE/maio-cluster/internal/toml"
 )
 
 // Index maps a model name to its direct download URL.
 type Index struct {
 	urls map[string]string
+	path string
 }
 
 // PathCandidates returns the lookup order for index files.
@@ -29,11 +30,12 @@ func PathCandidates() []string {
 	if exe, err := os.Executable(); err == nil {
 		out = append(out, filepath.Join(filepath.Dir(exe), "index.toml"))
 	}
-	out = append(out, config.IndexPath())
+	out = append(out, config.UserIndexPath(), config.IndexPath())
 	return out
 }
 
-// Load finds the first usable index in PathCandidates order; otherwise returns an empty index.
+// Load finds the first usable index in PathCandidates order; otherwise returns
+// an empty index.
 func Load() (*Index, error) {
 	for _, p := range PathCandidates() {
 		data, err := os.ReadFile(p)
@@ -42,13 +44,16 @@ func Load() (*Index, error) {
 		}
 		doc, err := toml.Parse(data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse index %s: %w", p, err)
+			return nil, errs.Wrap(errs.Config, err, "invalid model index %s", p).
+				WithHint(`index entries must look like: "deepseek-v4.1" = "https://.../model.gguf"`)
 		}
-		idx := &Index{urls: make(map[string]string, len(doc.Values))}
+		idx := &Index{urls: make(map[string]string, len(doc.Values)), path: p}
 		for k, v := range doc.Values {
-			if s, ok := v.(string); ok {
-				idx.urls[k] = s
+			s, ok := v.(string)
+			if !ok {
+				return nil, errs.Newf(errs.Config, "%s: line %d: index entry %q must be a URL string", p, doc.Line(k), k)
 			}
+			idx.urls[k] = s
 		}
 		return idx, nil
 	}
@@ -60,3 +65,9 @@ func (i *Index) URL(name string) (string, bool) {
 	u, ok := i.urls[name]
 	return u, ok
 }
+
+// Path returns the index file that was loaded ("" for an empty index).
+func (i *Index) Path() string { return i.path }
+
+// Entries returns the number of indexed models.
+func (i *Index) Entries() int { return len(i.urls) }

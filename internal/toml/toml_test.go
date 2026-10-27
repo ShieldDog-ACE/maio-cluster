@@ -46,3 +46,22 @@ func TestParseErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestQuotedKeysAndLines(t *testing.T) {
+	doc, err := Parse([]byte("\"deepseek-v4.1\" = \"https://example.com/x.gguf\"\nboot = 1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := doc.String("deepseek-v4.1"); !ok || v == "" {
+		t.Fatalf("quoted key not parsed: %v", doc.Values)
+	}
+	if doc.Line("deepseek-v4.1") != 1 || doc.Line("boot") != 2 {
+		t.Fatalf("unexpected line numbers: %v", doc.Lines)
+	}
+}
+
+func TestDuplicateKey(t *testing.T) {
+	if _, err := Parse([]byte("boot = 1\nboot = 0\n")); err == nil {
+		t.Fatal("duplicate key should fail")
+	}
+}

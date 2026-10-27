@@ -1,0 +1,10 @@
+#!/bin/sh
+# maio-cluster pre-remove: stop and disable the service on removal.
+set -e
+
+if [ "$1" = "remove" ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl stop maio.service >/dev/null 2>&1 || true
+    systemctl disable maio.service >/dev/null 2>&1 || true
+fi
+
+exit 0

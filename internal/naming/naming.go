@@ -4,19 +4,18 @@
 package naming
 
 import (
-	"fmt"
-	"regexp"
 	"strings"
-)
 
-var validPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*$`)
+	"github.com/ShieldDog-ACE/maio-cluster/internal/errs"
+)
 
 // Normalize converts user input to the canonical form.
 // Example: "DeepSeek v4.1" -> "deepseek-v4.1".
 func Normalize(raw string) (string, error) {
 	s := strings.ToLower(strings.TrimSpace(raw))
 	if s == "" {
-		return "", fmt.Errorf("model name is empty")
+		return "", errs.New(errs.Usage, "model name is empty").
+			WithHint("pass a name such as deepseek-v4.1")
 	}
 	var b strings.Builder
 	lastDash := false
@@ -31,23 +30,35 @@ func Normalize(raw string) (string, error) {
 				lastDash = true
 			}
 		default:
-			return "", fmt.Errorf("invalid character %q in model name: only a-z 0-9 . - are allowed (spaces become -)", string(r))
+			return "", errs.Newf(errs.Usage, "invalid character %q in model name", string(r)).
+				WithHint("only a-z, 0-9, '.' and '-' are allowed; spaces become '-'")
 		}
 	}
 	out := strings.Trim(b.String(), "-.")
 	if out == "" {
-		return "", fmt.Errorf("model name %q is empty after normalization", raw)
+		return "", errs.Newf(errs.Usage, "model name %q is empty after normalization", raw).
+			WithHint("use a name such as deepseek-v4.1")
 	}
-	if !validPattern.MatchString(out) {
-		return "", fmt.Errorf("invalid model name %q, expected something like deepseek-v4.1", out)
+	if err := Validate(out); err != nil {
+		return "", errs.Wrap(errs.Usage, err, "invalid model name %q", out).
+			WithHint("use lowercase letters, digits, '.' and '-' (example: deepseek-v4.1)")
 	}
 	return out, nil
 }
 
 // Validate checks a name that is already in canonical form.
 func Validate(name string) error {
-	if !validPattern.MatchString(name) {
-		return fmt.Errorf("invalid model name %q, expected something like deepseek-v4.1", name)
+	if name == "" {
+		return errs.New(errs.Usage, "model name is empty")
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '-':
+		case i == 0:
+			return errs.Newf(errs.Usage, "model name %q must start with a letter or digit", name)
+		default:
+			return errs.Newf(errs.Usage, "model name %q contains an unsupported character %q", name, string(r))
+		}
 	}
 	return nil
 }

@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# maio-cluster installer: installs the maio binary and writes a default config.
-# Source checkout form:  sudo bash maio-cluster
-# Packaged form:         sudo install maio-cluster
+# maio-cluster source installer.
+#
+#   sudo bash maio-cluster                 install and start on boot (default)
+#   sudo bash maio-cluster --no-start      install only
+#   sudo bash maio-cluster --boot 0        install with start-on-boot disabled
+#
+# The supported packaged path is: sudo apt install maio-cluster
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,7 +13,30 @@ SRC="$ROOT/bin/maio"
 DEST="/usr/local/bin/maio"
 CONF_DIR="/etc/maio"
 CONF="$CONF_DIR/maio.conf"
-MODELS_ROOT="/var/lib/maio/models"
+STATE_DIR="/var/lib/maio"
+MODELS_ROOT="$STATE_DIR/models"
+BOOT=1
+START=1
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-start) START=0 ;;
+    --boot)
+      shift
+      [ $# -gt 0 ] || { echo "--boot requires 0 or 1" >&2; exit 1; }
+      BOOT="$1"
+      ;;
+    -h|--help)
+      sed -n '2,10p' "$0"
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "run as root: sudo bash maio-cluster" >&2
@@ -21,14 +48,15 @@ if [ ! -x "$SRC" ]; then
 fi
 
 install -m 0755 "$SRC" "$DEST"
-mkdir -p "$CONF_DIR" "$MODELS_ROOT" "/var/lib/maio/run" "/var/lib/maio/log"
+install -d -m 0755 "$CONF_DIR" "$STATE_DIR" "$MODELS_ROOT" "$STATE_DIR/run" "$STATE_DIR/log"
 
 if [ ! -f "$CONF" ]; then
   cat > "$CONF" <<EOF
-# maio global config (not maio.toml; one per machine)
-boot        = 0
+# maio global config (one per machine; not maio.toml)
+# Start-on-boot is on by default. Use "sudo maio boot 0" to disable it.
+boot        = $BOOT
 models_root = "$MODELS_ROOT"
-state_dir   = "/var/lib/maio"
+state_dir   = "$STATE_DIR"
 host        = "127.0.0.1"
 port        = 11434
 mirror      = "https://www.modelscope.cn"
@@ -42,4 +70,16 @@ else
 fi
 
 echo "installed: $DEST"
-echo "next: set llama_bin in $CONF to your llama-server, then run maio list"
+if [ "$START" -eq 1 ]; then
+  if "$DEST" boot "$BOOT"; then
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl try-restart maio >/dev/null 2>&1 || true
+    fi
+    echo "start-on-boot: boot = $BOOT"
+  else
+    echo "warning: could not configure the service; run manually: maio serve" >&2
+  fi
+else
+  echo "start-on-boot not configured (--no-start)"
+fi
+echo "next: set llama_bin in $CONF to your llama-server, then run: maio doctor"

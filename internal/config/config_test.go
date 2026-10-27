@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -60,5 +61,66 @@ func TestModelRoundTrip(t *testing.T) {
 	}
 	if want := filepath.Join(modelDir, "w.gguf"); m.FilePath() != want {
 		t.Fatalf("FilePath = %q, want %q", m.FilePath(), want)
+	}
+}
+
+func TestDefaultBootIsOn(t *testing.T) {
+	if got := DefaultGlobal().Boot; got != 1 {
+		t.Fatalf("default boot = %d, want 1", got)
+	}
+}
+
+func TestUnknownKeyIsReported(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "maio.conf")
+	t.Setenv("MAIO_CONF", p)
+	if err := os.WriteFile(p, []byte("boot = 1\nboott = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadGlobal()
+	if err == nil {
+		t.Fatal("unknown key should fail")
+	}
+	if !strings.Contains(err.Error(), "unknown key") || !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWrongTypeIsReported(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "maio.conf")
+	t.Setenv("MAIO_CONF", p)
+	if err := os.WriteFile(p, []byte("boot = \"yes\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadGlobal()
+	if err == nil || !strings.Contains(err.Error(), "boot must be an integer") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestModelNameMustMatchDirectory(t *testing.T) {
+	dir := t.TempDir()
+	modelDir := filepath.Join(dir, "wrong-dir")
+	if err := SaveModel(modelDir, "other-name", "gguf", "w.gguf"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadModel(modelDir); err == nil {
+		t.Fatal("mismatched name should fail")
+	}
+}
+
+func TestModelRejectsUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	modelDir := filepath.Join(dir, "m")
+	if err := os.MkdirAll(modelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "name = \"m\"\nformat = \"gguf\"\npath = \"x.gguf\"\nextra = 1\n"
+	if err := os.WriteFile(ModelConfigPath(modelDir), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadModel(modelDir); err == nil {
+		t.Fatal("unknown model key should fail")
 	}
 }
