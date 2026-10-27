@@ -28,3 +28,10 @@ docs/taskbook/
 # python test helpers
 __pycache__/
 *.pyc
+
+# ship the small quick-view APK even though build outputs are ignored
+!v4/android/dist/
+!v4/android/dist/maio-viewer.apk
+
+v4/android/build/
+*.idsig

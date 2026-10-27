@@ -6,6 +6,8 @@
 </p>
 <p align="center"><sub>语言：点击徽章切换 · Language: click a badge to switch</sub></p>
 
+> **V4 分布式版在 [`v4/`](v4/README.md)**：Linux / Windows / macOS 三套独立产品 + Android 快速查看 APK。根目录 V3 仍是稳定的 Linux 版本。
+
 为局域网打造的大模型推理服务后端，**V3 稳定版：服务器级**。
 
 `maio` 是构建在 [llama.cpp](https://github.com/ggml-org/llama.cpp) 之上的

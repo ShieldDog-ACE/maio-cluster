@@ -6,6 +6,8 @@
 </p>
 <p align="center"><sub>Language: click a badge to switch · 语言：点击徽章切换</sub></p>
 
+> **V4 distributed is available in [`v4/`](v4/README.md)** — independent Linux/Windows/macOS products plus an Android quick-view APK. V3 at the repo root remains the stable Linux release.
+
 A large-model inference service backend for distributed LANs.
 **V3 stable: server grade.**
 

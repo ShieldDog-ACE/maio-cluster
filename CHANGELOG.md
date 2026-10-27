@@ -3,6 +3,20 @@
 All notable changes are recorded here. Versions follow the project roadmap
 (`v1.0`, `v2.0`, `v3.0`, ...).
 
+## v4.0.0 — 2026-10-27 (separate product line in `v4/`)
+
+V4 is a new distributed product, not a V3 patch. The V3 source at the repo
+root is unchanged. See [`v4/CHANGELOG.md`](v4/CHANGELOG.md) for details.
+
+- independent Linux/Windows/macOS product trees with their own installers;
+- llama.cpp RPC layer-splitting across agents, with capacity-based placement;
+- signed UDP discovery, token join, heartbeat, command long-poll and reverse
+  tunnel for NAT/firewall traversal;
+- model distribution, route/local fallbacks, SSE jobs;
+- read-only Android quick-view APK;
+- Linux `.deb`/tar, Windows `.zip`/PowerShell, macOS tar plus `.pkg`/`.dmg`
+  scripts; see [`v4/docs/TESTING.md`](v4/docs/TESTING.md) for the repeatable test commands.
+
 ## v3.1.0 — 2026-10-27
 
 ### Changed
