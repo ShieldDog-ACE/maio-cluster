@@ -44,6 +44,25 @@ func (c *Coordinator) routes() http.Handler {
 	mux.HandleFunc("GET /v1/jobs/{id}", c.auth(c.handleGetJob))
 	mux.HandleFunc("POST /v1/jobs/{id}/cancel", c.auth(c.handleCancelJob))
 	mux.HandleFunc("GET /v1/jobs/{id}/events", c.auth(c.handleJobEvents))
+
+	// Web console and package manager (v4.1).
+	mux.HandleFunc("GET /", c.handleWebIndex)
+	mux.HandleFunc("GET /app.js", c.handleWebAsset("app.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("GET /style.css", c.handleWebAsset("style.css", "text/css; charset=utf-8"))
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc("POST /v1/web/login", c.handleWebLogin)
+	mux.HandleFunc("POST /v1/web/logout", c.auth(c.handleWebLogout))
+	mux.HandleFunc("GET /v1/web/me", c.auth(c.handleWebMe))
+	mux.HandleFunc("GET /v1/market/plugins", c.auth(c.handleMarketPlugins))
+	mux.HandleFunc("GET /v1/market/models", c.auth(c.handleMarketModels))
+	mux.HandleFunc("GET /v1/plugins", c.auth(c.handlePluginList))
+	mux.HandleFunc("POST /v1/plugins/install", c.auth(c.handlePluginInstall))
+	mux.HandleFunc("POST /v1/plugins/{name}/update", c.auth(c.handlePluginUpdate))
+	mux.HandleFunc("DELETE /v1/plugins/{name}", c.auth(c.handlePluginRemove))
+	mux.HandleFunc("GET /v1/models/local", c.auth(c.handleLocalModels))
+	mux.HandleFunc("POST /v1/models/pull", c.auth(c.handlePullModel))
+	mux.HandleFunc("GET /v1/system", c.auth(c.handleSystem))
+	mux.HandleFunc("GET /v1/cluster/join-code", c.auth(c.handleJoinCode))
 	return withCommon(mux)
 }
 
@@ -57,14 +76,21 @@ func withCommon(next http.Handler) http.Handler {
 
 func (c *Coordinator) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tok := bearer(r)
-		if !TokenEqual(tok, c.cfg.Cluster.Token) {
+		if !c.authorized(r) {
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "cluster token is missing or wrong",
 				"paste the current code from \"maio cluster join-code\" on the coordinator")
 			return
 		}
 		next(w, r)
 	}
+}
+
+// authorized accepts an agent bearer token or the web console session cookie.
+func (c *Coordinator) authorized(r *http.Request) bool {
+	if TokenEqual(bearer(r), c.cfg.Cluster.Token) {
+		return true
+	}
+	return c.webCookieValid(r)
 }
 
 func bearer(r *http.Request) string {

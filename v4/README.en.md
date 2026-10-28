@@ -1,9 +1,11 @@
-# maio v4 · distributed
+# maio v4.1 · distributed
 
 A LAN-first distributed inference cluster built on llama.cpp RPC. One machine
 coordinates and runs the frontend; every other machine computes a share of the
 model layers. There are three independent product trees (Linux, Windows,
-macOS) plus a read-only Android quick-view APK.
+macOS). V4.1 adds a package manager (plugins via `install`, models via `pull`),
+an open market, and an optional web console; the Android APK is no longer
+evolving.
 
 V4 is not an adaptation layer on top of V3. V3 stays untouched at the repo
 root; V4 starts fresh under `v4/`:
@@ -14,8 +16,9 @@ v4/
 ├── linux/    Linux adapter + systemd + .deb/.tar.gz
 ├── windows/  Windows adapter + Task Scheduler + .zip/PowerShell
 ├── mac/      macOS adapter + launchd + .pkg/.dmg/.tar.gz
-├── android/  read-only quick-view APK (no compute)
-├── docs/     architecture, protocol, transports, verification
+├── web/      optional TS/CSS console (embedded, installed with maio web install)
+├── android/  legacy read-only APK (no compute)
+├── docs/     architecture, protocol, transports, verification, market
 └── scripts/  end-to-end test, llama.cpp RPC build
 ```
 
@@ -23,22 +26,36 @@ The three platform directories contain only OS-specific paths, service
 management, runtime lookup and packaging. The cluster protocol and scheduler
 live once in `core/`.
 
+## V4.1 in one minute
+
+```bash
+maio market                  # list market plugins/models
+maio install hello           # install a plugin from GitHub
+maio pull qwen2.5-0.5b       # download a model from the market
+maio web install             # optional web console
+```
+
+Market: <https://github.com/ShieldDog-ACE/maio-market>. Plugins live in each
+author's GitHub repo; a one-entry PR to `plugins.json` is the whole listing
+process. See [`docs/MARKET.md`](docs/MARKET.md).
+
 ## Quick start (two Linux machines)
 
 Machine A:
 
 ```bash
 maio id                # machine ID, node ID and registered token
-sudo apt install ./dist/maio-cluster_4.0.0_amd64.deb
+sudo apt install ./dist/maio-cluster_4.1.0_amd64.deb
 sudo maio --system token set '<long-lived-token>'   # optional fixed token
 sudo maio --system cluster join-code
-sudo maio --system model install qwen2.5-0.5b --url <gguf-url>
+sudo maio --system pull qwen2.5-0.5b
+sudo maio --system web install          # optional console
 ```
 
 Machine B:
 
 ```bash
-sudo apt install ./dist/maio-cluster_4.0.0_amd64.deb
+sudo apt install ./dist/maio-cluster_4.1.0_amd64.deb
 sudo maio --system cluster join 'MAIO1-...'
 sudo systemctl restart maio
 ```
@@ -88,7 +105,7 @@ make verify         # vet + race + two-node e2e
 Artifacts:
 
 ```
-dist/maio-cluster_4.0.0_amd64.deb
+dist/maio-cluster_4.1.0_amd64.deb
 dist/linux-amd64/{maio,bin/llama-server,bin/ggml-rpc-server,install.sh}
 dist/maio-windows-amd64.zip
 dist/maio-mac-arm64.tar.gz, dist/maio-mac-amd64.tar.gz

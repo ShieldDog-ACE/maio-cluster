@@ -74,11 +74,17 @@ func scopeName(system bool) string {
 }
 
 func printHelp() {
-	fmt.Print(`maio v4 — distributed llama.cpp cluster
+	fmt.Print(`maio v4.1 — distributed llama.cpp cluster
 
-usage: maio [--system] [--config PATH] [--json] <command> [args]
+usage: maio [--system] [--config PATH] [--market URL] [--json] <command> [args]
 
   init [--token T]         create a cluster identity and configuration
+  install <plugin>         install a plugin from the market
+  pull <model>             download a model from the market
+  plugins [list|rm|update] manage installed plugins
+  market [--plugins|--models] [--refresh]
+  search <query>           search plugins and models
+  web install|status|remove  optional web console
   cluster up               start the coordinator and the local agent
   cluster join <code>      join a coordinator from another machine
   cluster join-code        print a pairing code

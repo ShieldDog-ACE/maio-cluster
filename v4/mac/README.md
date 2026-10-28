@@ -13,7 +13,7 @@ On macOS with Go 1.24+, Xcode command-line tools and an RPC-enabled llama.cpp:
 cmake -S llama.cpp -B build-rpc -DGGML_METAL=ON -DGGML_RPC=ON
 cmake --build build-rpc -j
 
-VERSION=4.0.0 RPC_BIN=build-rpc/bin/ggml-rpc-server LLAMA_BIN=build-rpc/bin/llama-server \
+VERSION=4.1.0 RPC_BIN=build-rpc/bin/ggml-rpc-server LLAMA_BIN=build-rpc/bin/llama-server \
   ./mac/build.sh
 ./mac/packaging/build-pkg.sh          # .pkg
 ./mac/packaging/build-dmg.sh          # .dmg
@@ -31,7 +31,7 @@ From Linux/macOS without Xcode, produce per-architecture tarballs:
 ## Install
 
 ```bash
-sudo installer -pkg maio-cluster-4.0.0.pkg -target /
+sudo installer -pkg maio-cluster-4.1.0.pkg -target /
 # or
 tar -xzf maio-mac-arm64.tar.gz -C maio
 bash maio/install.sh --user          # LaunchAgent

@@ -1,5 +1,37 @@
 # Changelog
 
+## v4.1.0 — 2026-10-28
+
+V4.1 在 V4 的集群内核上增加包管理器、开源市场与可选 Web 控制台。
+
+### Added
+
+- **包管理器**：`maio pull <model>` 从市场下载模型；`maio install <plugin>`
+  从 GitHub 安装插件；`maio plugins list/update/remove`；`maio market`、
+  `maio search`。
+- **开源市场**：`ShieldDog-ACE/maio-market` 的 `plugins.json` / `models.json`
+  是唯一数据库；PR 合并即上架，客户端每次从远程清单解析，不内置本地副本。
+- **插件安装器**：GitHub tarball 下载、64/128 MiB 与 2000 文件上限、路径逃逸/
+  链接拒绝、`plugin.json` 校验、原子落盘、`.maio-plugin.json` 元数据。
+- **Web 控制台**：纯 TS/CSS（`v4/web`），登录、总览、对话、模型、插件、市场、
+  设置；资源嵌入二进制，`maio web install` 才落盘并提供 `/`。
+- **Web 会话**：集群 Token 换 HMAC 签名 HttpOnly Cookie（7 天），Cookie 同时
+  解锁 `/v1/nodes`、`/v1/jobs` 等集群 API；CSP、SameSite=Strict。
+- **市场/包管理 API**：`/v1/market/*`、`/v1/plugins*`、`/v1/models/local`、
+  `/v1/models/pull`、`/v1/system`、`/v1/cluster/join-code`。
+- **安装器**：Linux/macOS `--with-web` 直接调用 `maio web install`；新增
+  `install/` 官方命令行安装入口（Linux/macOS 用户级/系统级、离线 `--from`）。
+
+### Changed
+
+- 版本号 4.0.0 → 4.1.0；`--market` 全局参数与 `MAIO_MARKET_URL` 覆盖市场地址。
+- Web 前端不再作为独立 tar 包分发，改由二进制内嵌、显式安装。
+- README 增加包管理器、市场、Web 快速开始。
+
+### Deprecated
+
+- Android APK 不再演进；V4.1 以 Web 为正式终端。
+
 ## v4.0.0 — 2026-10-27
 
 V4 是独立的分布式产品线，位于 `v4/`。V3 根目录保持原样。

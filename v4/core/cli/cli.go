@@ -33,6 +33,7 @@ type options struct {
 	conf       *config.Config
 	paths      config.Paths
 	log        *slog.Logger
+	marketURL  string
 }
 
 // Run is the entry point. It returns a process exit code.
@@ -59,6 +60,10 @@ func Run(ad platform.Adapter, args []string) int {
 		return 0
 	case "init":
 		return opts.cmdInit(sub)
+	case "market":
+		return opts.cmdMarket(sub)
+	case "search":
+		return opts.cmdSearch(sub)
 	}
 	opts.paths = ad.Paths(opts.system)
 	if opts.configPath == "" {
@@ -129,6 +134,16 @@ func Run(ad platform.Adapter, args []string) int {
 		return opts.cmdLogs(sub)
 	case "token":
 		return opts.cmdToken(sub)
+	case "web":
+		return opts.cmdWeb(sub)
+	case "install":
+		return opts.cmdInstall(sub)
+	case "pull":
+		return opts.cmdPull(sub)
+	case "plugins":
+		return opts.cmdPlugins(sub)
+	case "plugin":
+		return opts.cmdPlugin(sub)
 	default:
 		err := errs.New(errs.Usage, "unknown command %q", cmd).
 			WithHint(`run "maio --help" to see all commands`)
@@ -158,6 +173,14 @@ func parseGlobal(o *options, args []string) ([]string, error) {
 			o.configPath = args[i]
 		case strings.HasPrefix(a, "--config="):
 			o.configPath = strings.TrimPrefix(a, "--config=")
+		case a == "--market":
+			if i+1 >= len(args) {
+				return nil, errs.New(errs.Usage, "--market requires a URL or directory")
+			}
+			i++
+			o.marketURL = args[i]
+		case strings.HasPrefix(a, "--market="):
+			o.marketURL = strings.TrimPrefix(a, "--market=")
 		case a == "--help" || a == "-h":
 			if len(rest) == 0 {
 				return []string{"help"}, nil

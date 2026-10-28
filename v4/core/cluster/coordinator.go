@@ -17,8 +17,10 @@ import (
 
 	"github.com/ShieldDog-ACE/maio-cluster/v4/core/config"
 	"github.com/ShieldDog-ACE/maio-cluster/v4/core/errs"
+	"github.com/ShieldDog-ACE/maio-cluster/v4/core/market"
 	"github.com/ShieldDog-ACE/maio-cluster/v4/core/model"
 	"github.com/ShieldDog-ACE/maio-cluster/v4/core/netinfo"
+	"github.com/ShieldDog-ACE/maio-cluster/v4/core/plugin"
 	"github.com/ShieldDog-ACE/maio-cluster/v4/core/version"
 )
 
@@ -73,6 +75,10 @@ type Coordinator struct {
 	// Models is the coordinator-local model cache. It serves model files to
 	// workers and supplies GGUF metadata to the planner.
 	Models *model.Store
+
+	// Plugins and Market back the package manager and the web console.
+	Plugins *plugin.Manager
+	Market  *market.Client
 }
 
 // NewCoordinator builds a coordinator from validated configuration.
@@ -93,6 +99,8 @@ func NewCoordinator(cfg *config.Config, log *slog.Logger) (*Coordinator, error) 
 		jobSubs:   map[string]map[chan JobEvent]struct{}{},
 		jobCancel: map[string]context.CancelFunc{},
 		done:      make(chan struct{}),
+		Plugins:   plugin.NewManager(cfg.Agent.DataDir),
+		Market:    market.New(marketBaseURL()),
 	}
 	c.info = ClusterInfo{
 		ID: cfg.Cluster.ID, Name: cfg.Cluster.Name, Version: version.Version,

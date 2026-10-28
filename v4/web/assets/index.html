@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>maio · 分布式算力控制台</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="login" class="login">
+    <div class="login-card">
+      <div class="brand big"><span class="logo">m</span><div><h1>maio</h1><p>局域网分布式算力控制台</p></div></div>
+      <form id="login-form" autocomplete="off">
+        <label>控制台地址
+          <input id="login-server" type="url" placeholder="http://127.0.0.1:47800" spellcheck="false">
+        </label>
+        <label>集群 Token
+          <input id="login-token" type="password" placeholder="从协调者执行 maio cluster join-code 获取" spellcheck="false">
+        </label>
+        <button class="primary" type="submit">进入控制台</button>
+        <p id="login-error" class="error" role="alert"></p>
+      </form>
+      <div id="login-recent" class="recent" hidden>
+        <span>最近访问</span>
+        <div id="login-recent-list"></div>
+      </div>
+      <p class="fineprint">Token 只用于换取 HttpOnly 会话 Cookie，不会写入页面存储。</p>
+    </div>
+  </div>
+
+  <div id="app" class="app" hidden>
+    <aside class="sidebar">
+      <div class="brand"><span class="logo">m</span><div><strong>maio</strong><small>v4.1</small></div></div>
+      <nav id="nav">
+        <button data-view="overview" class="active"><span>▦</span>总览</button>
+        <button data-view="chat"><span>✎</span>对话</button>
+        <button data-view="models"><span>◈</span>模型</button>
+        <button data-view="plugins"><span>◧</span>插件</button>
+        <button data-view="market"><span>⌁</span>市场</button>
+        <button data-view="settings"><span>⚙</span>设置</button>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="cluster-chip" class="chip">disconnected</span>
+        <button id="logout" class="link">退出</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h2 id="view-title">总览</h2>
+          <p id="cluster-sub" class="muted">正在连接…</p>
+        </div>
+        <div class="top-actions">
+          <button id="refresh" class="ghost" title="刷新">刷新</button>
+          <button id="theme" class="ghost" title="切换主题">◐</button>
+        </div>
+      </header>
+
+      <section id="view-overview" class="view">
+        <div class="cards" id="overview-cards"></div>
+        <div class="grid two">
+          <div class="panel">
+            <div class="panel-head"><h3>节点</h3><span id="nodes-count" class="muted"></span></div>
+            <div id="nodes-table" class="table-wrap"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>最近任务</h3><span id="jobs-count" class="muted"></span></div>
+            <div id="jobs-list" class="jobs"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>本机硬件</h3></div>
+          <div id="hardware" class="hardware"></div>
+        </div>
+      </section>
+
+      <section id="view-chat" class="view" hidden>
+        <div class="panel chat-panel">
+          <div class="chat-head">
+            <select id="chat-model" class="select"></select>
+            <select id="chat-mode" class="select small">
+              <option value="auto">auto</option>
+              <option value="local">local</option>
+              <option value="shard">shard</option>
+              <option value="route">route</option>
+            </select>
+            <button id="chat-clear" class="ghost">清空</button>
+          </div>
+          <div id="chat-log" class="chat-log"></div>
+          <form id="chat-form" class="chat-form">
+            <textarea id="chat-input" rows="3" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+            <button class="primary" type="submit">发送</button>
+          </form>
+        </div>
+      </section>
+
+      <section id="view-models" class="view" hidden>
+        <div class="grid two">
+          <div class="panel">
+            <div class="panel-head"><h3>本机模型</h3><span id="local-models-count" class="muted"></span></div>
+            <div id="local-models" class="table-wrap"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>拉取模型</h3></div>
+            <form id="pull-form" class="stack">
+              <label>市场模型
+                <select id="pull-market" class="select"></select>
+              </label>
+              <label>或直链 / 本地路径
+                <input id="pull-url" placeholder="https://.../model.gguf 或 /path/model.gguf" spellcheck="false">
+              </label>
+              <label>名称（直链时必填）
+                <input id="pull-name" placeholder="qwen2.5-0.5b" spellcheck="false">
+              </label>
+              <button class="primary" type="submit">下载</button>
+              <p id="pull-status" class="muted"></p>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-plugins" class="view" hidden>
+        <div class="panel">
+          <div class="panel-head"><h3>已安装插件</h3><span id="plugins-count" class="muted"></span></div>
+          <div id="plugins-list" class="plugin-grid"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>安装提示</h3></div>
+          <p class="muted">插件来自市场仓库，安装后落在数据目录 <code>plugins/&lt;name&gt;</code>。安装器只做落盘与清单校验，不会自动执行插件代码。</p>
+        </div>
+      </section>
+
+      <section id="view-market" class="view" hidden>
+        <div class="panel">
+          <div class="panel-head">
+            <h3>插件市场</h3>
+            <div class="panel-actions">
+              <span id="market-base" class="muted small"></span>
+              <button id="market-refresh" class="ghost">刷新</button>
+            </div>
+          </div>
+          <div id="market-plugins" class="plugin-grid"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>模型市场</h3></div>
+          <div id="market-models" class="table-wrap"></div>
+        </div>
+      </section>
+
+      <section id="view-settings" class="view" hidden>
+        <div class="grid two">
+          <div class="panel">
+            <div class="panel-head"><h3>集群</h3></div>
+            <dl id="settings-cluster" class="kv"></dl>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>入网</h3></div>
+            <p class="muted">在另一台机器上执行：</p>
+            <pre id="join-code" class="code">加载中…</pre>
+            <button id="copy-join" class="ghost">复制加入命令</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>路径与市场</h3></div>
+          <dl id="settings-paths" class="kv"></dl>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

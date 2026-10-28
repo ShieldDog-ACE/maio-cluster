@@ -4,10 +4,12 @@
 #   .\install.ps1 -Worker         # per-user agent only
 #   .\install.ps1 -System         # machine-wide service (run as Administrator)
 #   .\install.ps1 -System -Worker -JoinCode "MAIO1-..."
+#   .\install.ps1 -Web                 # also install the optional web console
 param(
     [switch]$System,
     [switch]$Worker,
     [switch]$NoStart,
+    [switch]$Web,
     [string]$JoinCode = ""
 )
 $ErrorActionPreference = "Stop"
@@ -49,6 +51,11 @@ if ($JoinCode) {
         & $exe @scopeArgs init --force
         if ($LASTEXITCODE -ne 0) { throw "init failed" }
     }
+}
+
+if ($Web) {
+    & $exe @scopeArgs web install
+    if ($LASTEXITCODE -ne 0) { Write-Warning "web install failed; run: $exe $($scopeArgs -join ' ') web install" }
 }
 
 if (-not $NoStart) {

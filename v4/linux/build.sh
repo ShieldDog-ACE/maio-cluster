@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the Linux product: maio + the RPC-enabled llama.cpp runtime.
 #
-#   VERSION=4.0.0 ./linux/build.sh
+#   VERSION=4.1.0 ./linux/build.sh
 #   RPC_BIN=/path/ggml-rpc-server LLAMA_BIN=/path/llama-server ./linux/build.sh
 #
 # Cross-compiling maio itself is possible from any OS:
@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${VERSION:-4.0.0}"
+VERSION="${VERSION:-4.1.0}"
 ARCH="${ARCH:-$(go env GOARCH)}"
 OUT="${OUT:-dist/linux-$ARCH}"
 RPC_BIN="${RPC_BIN:-}"
@@ -42,4 +42,6 @@ cp linux/packaging/maio.service "$OUT/maio.service"
 cp linux/packaging/install.sh "$OUT/install.sh"
 cp README.md "$OUT/README.md" 2>/dev/null || true
 chmod +x "$OUT/install.sh"
+(cd "$OUT" && tar -czf "../maio-linux-$ARCH.tar.gz" .)
 echo "built: $OUT"
+echo "built: dist/maio-linux-$ARCH.tar.gz"

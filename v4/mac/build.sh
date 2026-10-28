@@ -6,7 +6,7 @@
 # Linux to produce per-architecture tarballs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VERSION="${VERSION:-4.0.0}"
+VERSION="${VERSION:-4.1.0}"
 OUT="${OUT:-dist/mac-universal}"
 RPC_BIN="${RPC_BIN:-}"
 LLAMA_BIN="${LLAMA_BIN:-}"

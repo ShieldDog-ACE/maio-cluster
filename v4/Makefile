@@ -1,4 +1,4 @@
-# maio v4 — three platform products plus a shared cluster core.
+# maio v4.1 — three platform products plus a shared cluster core.
 #
 #   make build             Linux product (maio + optional RPC runtime)
 #   make build-all         Linux, Windows zip and macOS tarballs
@@ -7,16 +7,20 @@
 #   make verify            vet + race tests + two-node e2e
 #
 # Bundle llama.cpp RPC binaries with RPC_BIN=... LLAMA_BIN=...
-VERSION ?= 4.0.0
+VERSION ?= 4.1.0
 RPC_BIN ?=
 LLAMA_BIN ?=
 ANDROID_SDK ?=
 JAVA_HOME ?=
 
-.PHONY: all build build-all linux windows mac apk package-linux package-windows \
+.PHONY: all build build-all linux windows mac apk web package-linux package-windows \
 	package-mac test race vet fmt e2e verify runtime clean dist
 
 all: build-all
+
+# Rebuild the optional web console (requires tsc); assets are committed already.
+web:
+	./web/build.sh
 
 build: linux
 

@@ -1,6 +1,6 @@
-# maio v4 · 分布式
+# maio v4.1 · 分布式
 
-> 基于 llama.cpp RPC 的局域网分布式推理集群。一台机器做协调与前端的张量调度，多台机器各承担一部分层（layer）的硬件计算；支持 Linux、Windows、macOS 三个独立产品目录，以及一个只读快速查看的 Android APK。
+> 基于 llama.cpp RPC 的局域网分布式推理集群。一台机器做协调与前端的张量调度，多台机器各承担一部分层（layer）的硬件计算；支持 Linux、Windows、macOS 三个独立产品目录。V4.1 增加包管理器（插件 `install` / 模型 `pull`）、开源市场与可选 Web 控制台，并下线 Android APK 方向。
 
 V4 不是把 Windows/macOS 补丁塞进 V3。仓库里 **V3 原样保留在根目录**，V4 从 `v4/` 重新开始：
 
@@ -10,8 +10,9 @@ v4/
 ├── linux/     Linux 适配 + systemd + .deb/.tar.gz
 ├── windows/   Windows 适配 + 计划任务 + .zip/PowerShell 安装器
 ├── mac/       macOS 适配 + launchd + .pkg/.dmg/.tar.gz
-├── android/   只读快速查看 APK（不参与计算）
-├── docs/      架构、协议、链路、测试、迁移
+├── web/       纯 TS/CSS 控制台（嵌入二进制，可选安装）
+├── android/   V4 的只读 APK（V4.1 起不再演进）
+├── docs/      架构、协议、链路、测试、迁移、市场
 └── scripts/   端到端测试、llama.cpp RPC 构建
 ```
 
@@ -29,7 +30,28 @@ v4/
 | 模型分发 | 协调者通过带鉴权的 HTTP 把 GGUF 推给 worker，支持断点续传与 SHA-256 |
 | 断网/防火墙 | 直连失败自动走协调者反向 TCP 隧道（47802），worker 仍只需主动出站 |
 | 四种链路 | 局域网 Wi-Fi、网线、USB 数据线/共享、手机热点——全部是 IP 链路，同一套协议 |
-| 快速查看 | Android APK 读取 `/v1/info`、`/v1/nodes`、`/v1/models`、`/v1/jobs`，不下载模型、不参与计算 |
+| 包管理器 | `maio install <plugin>` 从 GitHub 安装插件；`maio pull <model>` 从市场下载模型 |
+| 开源市场 | `plugins.json` / `models.json` 放在 `ShieldDog-ACE/maio-market`，PR 合并即上架，零服务器成本 |
+| Web 控制台 | 纯 TS/CSS，登录后看节点/对话/模型/插件/市场；资源嵌入二进制，`maio web install` 才落盘 |
+| 快速查看 | V4 的 Android APK 保留但不演进；V4.1 以 Web 为正式终端 |
+
+## 0. V4.1 新东西
+
+```bash
+maio market                       # 列出市场插件与模型
+maio install hello                # 安装插件（GitHub 仓库）
+maio pull qwen2.5-0.5b            # 从市场下载模型
+maio web install                  # 安装可选 Web 控制台
+maio web status                   # 看目录/地址
+```
+
+市场仓库：<https://github.com/ShieldDog-ACE/maio-market>。
+插件开发者把仓库放在自己的 GitHub，给市场发一个只改 `plugins.json` 的 PR，
+合并即上架；客户端始终从远程清单解析，不使用本地内置列表。
+细节见 [`docs/MARKET.md`](docs/MARKET.md)。
+
+Web 控制台默认不对外开放：`maio web install` 把嵌入资源落盘后，协调者的 `/`
+才开始提供登录页；未安装时返回一段 CLI 提示。登录用集群 Token 换 HttpOnly Cookie。
 
 ## 1.1 查看本机身份
 
@@ -49,18 +71,18 @@ maio id
 ### A 机（协调者）
 
 ```bash
-sudo apt install ./dist/maio-cluster_4.0.0_amd64.deb
+sudo apt install ./dist/maio-cluster_4.1.0_amd64.deb
 sudo maio --system token set '<你的长期token>'  # 固定长期 token（可选）
 sudo maio --system cluster join-code     # 复制 MAIO1-... 配对码
-sudo maio --system model install qwen2.5-0.5b \
-  --url https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master/qwen2.5-0.5b-instruct-q4_k_m.gguf
+sudo maio --system pull qwen2.5-0.5b      # 从 maio-market 下载
+sudo maio --system web install            # 可选：Web 控制台
 sudo maio --system cluster nodes
 ```
 
 ### B 机（worker）
 
 ```bash
-sudo apt install ./dist/maio-cluster_4.0.0_amd64.deb
+sudo apt install ./dist/maio-cluster_4.1.0_amd64.deb
 sudo maio --system cluster join 'MAIO1-...'
 sudo systemctl restart maio
 sudo maio --system service install --worker   # 只跑 agent（可选）
@@ -93,13 +115,13 @@ sudo maio --system run qwen2.5-0.5b "只回答：分布式成功" --mode shard
 
 ```bash
 # macOS：pkg 或 tar
-sudo installer -pkg maio-cluster-4.0.0.pkg -target /
+sudo installer -pkg maio-cluster-4.1.0.pkg -target /
 sudo maio --system cluster join 'MAIO1-...'
 ```
 
 详见 [`linux/README.md`](linux/README.md)、[`windows/README.md`](windows/README.md)、[`mac/README.md`](mac/README.md)。
 
-## 3. Android APK（只读快速查看）
+## 3. Android APK（V4 保留，V4.1 不再演进）
 
 已构建：`android/dist/maio-viewer.apk`（约 21 KiB，minSdk 24 / target 34）。
 
@@ -156,7 +178,7 @@ make verify             # vet + race + 两节点 e2e
 产物：
 
 ```
-dist/maio-cluster_4.0.0_amd64.deb
+dist/maio-cluster_4.1.0_amd64.deb
 dist/linux-amd64/{maio,bin/llama-server,bin/ggml-rpc-server,install.sh}
 dist/maio-windows-amd64.zip
 dist/maio-mac-arm64.tar.gz, dist/maio-mac-amd64.tar.gz
@@ -207,6 +229,7 @@ E2E_MODEL=/path/model.gguf \
 - [协议](docs/PROTOCOL.md)
 - [四种链路](docs/TRANSPORTS.md)
 - [测试说明](docs/TESTING.md)
+- [包管理器与市场](docs/MARKET.md)
 - [V3 → V4 迁移](docs/MIGRATION.md)
 
 ## 10. 与 V3 的关系

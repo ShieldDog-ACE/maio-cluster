@@ -42,13 +42,13 @@ MAIO_FORCE_TUNNEL=1 E2E_MODEL=/path/model.gguf ./scripts/e2e.sh
 
 ```bash
 # Linux deb
-VERSION=4.0.0 RPC_BIN=... LLAMA_BIN=... ./linux/packaging/build-deb.sh
+VERSION=4.1.0 RPC_BIN=... LLAMA_BIN=... ./linux/packaging/build-deb.sh
 
 # Windows zip（Linux/macOS 交叉编译）
-VERSION=4.0.0 ./windows/build-cross.sh
+VERSION=4.1.0 ./windows/build-cross.sh
 
 # macOS 双架构 tar
-VERSION=4.0.0 ./mac/build-cross.sh
+VERSION=4.1.0 ./mac/build-cross.sh
 
 # Android APK
 ANDROID_SDK=/path/android-sdk JAVA_HOME=/path/jdk-17 ./android/build-apk.sh
@@ -64,3 +64,22 @@ ANDROID_SDK=/path/android-sdk JAVA_HOME=/path/jdk-17 ./android/build-apk.sh
 - macOS `.pkg/.dmg` 的安装与 launchd 启动。
 
 测试产生的临时目录和日志应由脚本清理（`scripts/e2e.sh` 使用 `trap` 删除）。
+
+## 5. 市场与包管理器
+
+```bash
+go test ./core/market ./core/plugin ./core/cluster
+go test -race ./core/market ./core/plugin
+```
+
+测试用本地 fixture 与 `httptest`，不访问 GitHub。手工验收：
+
+```bash
+maio market
+maio install hello
+maio plugins
+maio web install
+curl -s http://127.0.0.1:47800/ | head
+```
+
+发布前做一次浏览器冒烟：登录 → 市场 → 安装插件 → 插件页出现该条目。

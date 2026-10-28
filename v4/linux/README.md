@@ -8,7 +8,7 @@ installer.
 
 ```bash
 # Debian / Ubuntu
-sudo apt install ./dist/maio-cluster_4.0.0_amd64.deb
+sudo apt install ./dist/maio-cluster_4.1.0_amd64.deb
 sudo maio --system cluster join-code      # print a pairing code
 sudo maio --system cluster nodes          # members
 journalctl -u maio -f                     # logs
@@ -21,7 +21,7 @@ first install and starts `maio cluster up` through systemd. Model data lives in
 Source install:
 
 ```bash
-VERSION=4.0.0 RPC_BIN=/path/ggml-rpc-server LLAMA_BIN=/path/llama-server \
+VERSION=4.1.0 RPC_BIN=/path/ggml-rpc-server LLAMA_BIN=/path/llama-server \
   ./linux/build.sh
 sudo bash dist/linux-amd64/install.sh
 ```

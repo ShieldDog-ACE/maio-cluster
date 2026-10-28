@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Build an installable Debian package for the Linux product.
 #
-#   VERSION=4.0.0 ARCH=amd64 \
+#   VERSION=4.1.0 ARCH=amd64 \
 #   RPC_BIN=/tmp/llama-rpc-build/bin/ggml-rpc-server \
 #   LLAMA_BIN=/tmp/llama-rpc-build/bin/llama-server \
 #   ./linux/packaging/build-deb.sh
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-VERSION="${VERSION:-4.0.0}"
+VERSION="${VERSION:-4.1.0}"
 ARCH="${ARCH:-amd64}"
 RPC_BIN="${RPC_BIN:-}"
 LLAMA_BIN="${LLAMA_BIN:-}"
