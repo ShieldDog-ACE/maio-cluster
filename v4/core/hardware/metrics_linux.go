@@ -17,6 +17,7 @@ func samplePlatform(s *Sampler, now time.Time) Metrics {
 	m.CPUPercent = s.cpuPercent()
 	m.CPUFreqMHz = cpuFreqMHz()
 	m.CPUFreqMaxMHz = cpuMaxMHz()
+	m.CPUTempC = cpuTempC()
 	m.MemTotal, m.MemUsed, m.MemPercent = memUsage()
 	if !s.memFreqOK {
 		s.memFreq = detectMemFreq()
@@ -128,6 +129,34 @@ func cpuMaxMHz() float64 {
 	return 0
 }
 
+func cpuTempC() float64 {
+	zones, _ := filepath.Glob("/sys/class/thermal/thermal_zone*")
+	var best float64
+	for _, z := range zones {
+		typ, err := os.ReadFile(filepath.Join(z, "type"))
+		if err != nil {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(string(typ)))
+		if !strings.Contains(name, "x86_pkg_temp") && !strings.Contains(name, "coretemp") &&
+			!strings.Contains(name, "k10temp") && !strings.Contains(name, "cpu") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(z, "temp"))
+		if err != nil {
+			continue
+		}
+		v, err := strconv.ParseFloat(strings.TrimSpace(string(data)), 64)
+		if err == nil && v > 0 {
+			v /= 1000
+			if v > best {
+				best = v
+			}
+		}
+	}
+	return best
+}
+
 func memUsage() (total, used uint64, percent float64) {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
@@ -190,7 +219,7 @@ func firstNumber(s string) uint64 {
 
 func gpuMetrics() []GPUMetrics {
 	out, err := runBrief(2*time.Second, "nvidia-smi",
-		"--query-gpu=index,utilization.gpu,memory.used,memory.total,clocks.mem,pcie.link.gen.current,pcie.link.width.current",
+		"--query-gpu=index,utilization.gpu,memory.used,memory.total,clocks.mem,pcie.link.gen.current,pcie.link.width.current,power.draw,power.limit,power.max_limit,temperature.gpu,temperature.memory",
 		"--format=csv,noheader,nounits")
 	if err != nil {
 		return nil
@@ -216,6 +245,13 @@ func gpuMetrics() []GPUMetrics {
 		g.PCIeGen = atoi(parts[5])
 		g.PCIeWidth = atoi(parts[6])
 		g.PCIeGBs = pcieGBs(g.PCIeGen, g.PCIeWidth)
+		if len(parts) >= 12 {
+			g.PowerW = atof(parts[7])
+			g.PowerLimitW = atof(parts[8])
+			g.PowerMaxW = atof(parts[9])
+			g.TempC = atof(parts[10])
+			g.MemTempC = atof(parts[11])
+		}
 		res = append(res, g)
 	}
 	return res

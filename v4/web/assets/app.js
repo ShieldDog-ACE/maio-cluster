@@ -94,7 +94,7 @@ async function boot() {
         showApp();
         await refresh();
         window.clearInterval(state.timer);
-        state.timer = window.setInterval(() => { void refresh(true); }, 3000);
+        state.timer = window.setInterval(() => { void refresh(true); }, 2000);
     }
     catch (e) {
         showLogin(e.message === "unauthorized" ? "" : e.message);
@@ -136,10 +136,14 @@ async function refresh(silent = false) {
 }
 function loadInfo(n) {
     const m = n.metrics || {};
-    let pct = m.load_percent || 0;
-    if (!pct) {
-        pct = Math.max(m.cpu_percent || 0, m.mem_percent || 0, ...(m.gpus || []).map((g) => g.vram_percent || 0));
+    let used = 0, total = 0;
+    for (const g of m.gpus || []) {
+        used += g.vram_used || 0;
+        total += g.vram_total || 0;
     }
+    const vramPct = total > 0 ? 100 * used / total : 0;
+    let pct = (m.cpu_percent || 0) + (m.mem_percent || 0) + vramPct;
+    pct = pct / ((m.gpus || []).length > 0 ? 3 : 2);
     pct = clamp(pct);
     const label = pct < 50 ? "流畅" : pct <= 90 ? "平稳" : "繁忙";
     const color = pct < 50 ? "var(--green)" : pct <= 90 ? "var(--amber)" : "var(--red)";
@@ -192,17 +196,22 @@ function render() {
         total: a.total + (g.vram_total || 0),
         util: Math.max(a.util, g.utilization || 0),
         bw: Math.max(a.bw, g.pcie_gbs || 0),
+        power: a.power + (g.power_w || 0),
+        limit: a.limit + (g.power_limit_w || 0),
+        max: a.max + (g.power_max_w || 0),
+        temp: Math.max(a.temp, g.temp_c || 0),
+        memTemp: Math.max(a.memTemp, g.mem_temp_c || 0),
         pct: 0,
-    }), { used: 0, total: 0, util: 0, bw: 0, pct: 0 });
+    }), { used: 0, total: 0, util: 0, bw: 0, power: 0, limit: 0, max: 0, temp: 0, memTemp: 0, pct: 0 });
     vram.pct = vram.total ? 100 * vram.used / vram.total : 0;
     const rate = (m.rx_bps || 0) + (m.tx_bps || 0);
     const linkBps = (m.net_link_mbps || 0) * 1e6;
     const netPct = linkBps > 0 ? 100 * rate / linkBps : 0;
     $("#metrics").innerHTML = [
         metricCard("负载", load.pct, "负载", load.color, `CPU ${(m.cpu_percent || 0).toFixed(0)}% · 内存 ${(m.mem_percent || 0).toFixed(0)}% · 显存 ${vram.pct.toFixed(0)}%`, "", load.state, load.pct < 50 ? "green" : load.pct <= 90 ? "amber" : "red"),
-        metricCard("CPU", m.cpu_percent || 0, "占用", "var(--accent)", `${usedCores.toFixed(1)} / ${cores} 核`, `频率 <b>${clock(m.cpu_freq_mhz)}</b> / ${clock(m.cpu_freq_max_mhz)}`),
+        metricCard("CPU", m.cpu_percent || 0, "占用", "var(--accent)", `${usedCores.toFixed(1)} / ${cores} 核`, `频率 <b>${clock(m.cpu_freq_mhz)}</b> / ${clock(m.cpu_freq_max_mhz)}<br>温度 <b>${m.cpu_temp_c ? m.cpu_temp_c.toFixed(0) + "°C" : "—"}</b>`),
         metricCard("内存", m.mem_percent || 0, "占用", "var(--green)", `${bytes(m.mem_used)} / ${bytes(m.mem_total)}`, `频率 <b>${m.mem_freq_mhz ? m.mem_freq_mhz + " MHz" : "—"}</b>`),
-        metricCard("显存", vram.pct, "占用", "var(--cyan, #55d6ff)", `${bytes(vram.used)} / ${bytes(vram.total)}`, `带宽 <b>${vram.bw ? vram.bw.toFixed(1) + " GB/s" : "—"}</b>`),
+        metricCard("显存", vram.pct, "占用", "var(--cyan, #55d6ff)", `${bytes(vram.used)} / ${bytes(vram.total)}`, `功耗 <b>${vram.power.toFixed(1)} / ${vram.limit.toFixed(0)} W</b><br>最大 <b>${vram.max.toFixed(0)} W</b> · 温度 <b>${vram.temp ? vram.temp.toFixed(0) + "°C" : "—"}</b>`),
         metricCard("流量", netPct, "带宽", "var(--amber)", `${bitrate(rate)} / ${linkBps ? mbps(m.net_link_mbps) : "—"}`, `↓ <b>${bitrate(m.rx_bps || 0)}</b> · ↑ <b>${bitrate(m.tx_bps || 0)}</b><br>带宽 <b>${m.net_link_mbps ? mbps(m.net_link_mbps) : "—"}</b>`),
     ].join("");
     renderConfig(n);
@@ -220,6 +229,8 @@ function renderConfig(n) {
           <dl class="kv">
             <dt>显存</dt><dd>${bytes(g.vram_used)} / ${bytes(g.vram_total)} (${g.vram_percent.toFixed(1)}%)</dd>
             <dt>利用率</dt><dd>${g.utilization.toFixed(0)}%</dd>
+            <dt>功耗</dt><dd>${g.power_w.toFixed(1)} W / ${g.power_limit_w.toFixed(0)} W（最大 ${g.power_max_w.toFixed(0)} W）</dd>
+            <dt>温度</dt><dd>${g.temp_c ? g.temp_c.toFixed(0) + "°C" : "—"} / 显存 ${g.mem_temp_c ? g.mem_temp_c.toFixed(0) + "°C" : "—"}</dd>
             <dt>显存频率</dt><dd>${g.mem_clock_mhz ? g.mem_clock_mhz + " MHz" : "—"}</dd>
             <dt>PCIe</dt><dd>${g.pcie_gen ? `Gen${g.pcie_gen} x${g.pcie_width} · ${g.pcie_gbs.toFixed(1)} GB/s` : "—"}</dd>
             <dt>驱动</dt><dd>${esc(info?.driver || "—")}</dd>
@@ -265,6 +276,7 @@ function renderConfig(n) {
         <dt>CPU 型号</dt><dd>${esc(n.hardware.cpu_model)}</dd>
         <dt>核心</dt><dd>${n.hardware.cpu_cores}</dd>
         <dt>频率</dt><dd>${clock(m.cpu_freq_mhz)} / 最大 ${clock(m.cpu_freq_max_mhz)}</dd>
+        <dt>温度</dt><dd>${m.cpu_temp_c ? m.cpu_temp_c.toFixed(0) + "°C" : "—"}</dd>
         <dt>内存</dt><dd>${bytes(m.mem_used)} / ${bytes(m.mem_total)}（可用 ${bytes(n.hardware.mem_free)}）</dd>
         <dt>内存频率</dt><dd>${m.mem_freq_mhz ? m.mem_freq_mhz + " MHz" : "—"}</dd>
         <dt>磁盘</dt><dd>${esc(n.hardware.disk_path)} · 可用 ${bytes(n.hardware.disk_free)}</dd>

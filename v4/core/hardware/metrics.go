@@ -16,6 +16,11 @@ type GPUMetrics struct {
 	PCIeGen     int     `json:"pcie_gen"`
 	PCIeWidth   int     `json:"pcie_width"`
 	PCIeGBs     float64 `json:"pcie_gbs"`
+	PowerW      float64 `json:"power_w"`
+	PowerLimitW float64 `json:"power_limit_w"`
+	PowerMaxW   float64 `json:"power_max_w"`
+	TempC       float64 `json:"temp_c"`
+	MemTempC    float64 `json:"mem_temp_c"`
 }
 
 // Metrics is a live resource sample sent with each heartbeat.
@@ -28,6 +33,7 @@ type Metrics struct {
 	MemUsed       uint64       `json:"mem_used"`
 	MemPercent    float64      `json:"mem_percent"`
 	MemFreqMHz    uint64       `json:"mem_freq_mhz"`
+	CPUTempC      float64      `json:"cpu_temp_c"`
 	GPUs          []GPUMetrics `json:"gpus,omitempty"`
 	RXBps         uint64       `json:"rx_bps"`
 	TXBps         uint64       `json:"tx_bps"`
@@ -66,14 +72,18 @@ func (s *Sampler) Sample() Metrics {
 }
 
 func loadState(m Metrics) (float64, string) {
-	p := m.CPUPercent
-	if m.MemPercent > p {
-		p = m.MemPercent
-	}
+	used, total := uint64(0), uint64(0)
 	for _, g := range m.GPUs {
-		if g.MemPercent > p {
-			p = g.MemPercent
-		}
+		used += g.MemUsed
+		total += g.MemTotal
+	}
+	vram := 0.0
+	if total > 0 {
+		vram = 100 * float64(used) / float64(total)
+	}
+	p := (m.CPUPercent + m.MemPercent + vram) / 3
+	if len(m.GPUs) == 0 {
+		p = (m.CPUPercent + m.MemPercent) / 2
 	}
 	switch {
 	case p < 50:

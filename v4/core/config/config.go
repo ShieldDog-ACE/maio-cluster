@@ -103,7 +103,7 @@ func Default(paths Paths) *Config {
 			ModelsDir:    paths.ModelsDir,
 			RPCPortBase:  50100,
 			MaxJobs:      2,
-			HeartbeatSec: 3,
+			HeartbeatSec: 2,
 			OfflineSec:   15,
 		},
 		Llama: Llama{
