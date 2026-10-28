@@ -2,6 +2,8 @@
 
 本目录是 maio 的**官方命令行安装入口**。它只做一件事：把 maio 装到机器上，并把“装什么”拆成两层。
 
+发布物：<https://github.com/ShieldDog-ACE/maio-cluster/releases/tag/v4.1.0>
+
 | 层 | 装什么 | 装法 | 必需 |
 | --- | --- | --- | --- |
 | CLI 内核 | `maio` 单二进制、集群协议、llama.cpp 运行时 | `linux/install.sh`、`mac/install.sh` | 是 |
