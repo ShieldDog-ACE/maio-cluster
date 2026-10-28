@@ -1,89 +1,81 @@
-/* maio v4.1 web console. No framework: DOM + fetch + SSE. */
-
+type GPUInfo = {
+  index: number; name: string; backend: string; vram_total: number; vram_free: number;
+  driver?: string; compute?: string;
+};
+type GPUMetrics = {
+  index: number; utilization: number; vram_used: number; vram_total: number;
+  vram_percent: number; mem_clock_mhz: number; pcie_gen: number; pcie_width: number; pcie_gbs: number;
+};
+type Metrics = {
+  sampled_at: string; cpu_percent: number; cpu_freq_mhz: number; cpu_freq_max_mhz: number;
+  mem_total: number; mem_used: number; mem_percent: number; mem_freq_mhz: number;
+  gpus?: GPUMetrics[]; rx_bps: number; tx_bps: number; net_link_mbps: number;
+  load_percent: number; load_state: string;
+};
+type ClusterNode = {
+  id: string; name: string; role: string; os: string; arch: string; version: string;
+  protocol: number; host: string; api_port: number; state: string; compute: boolean;
+  joined_at: string; last_seen: string;
+  hardware: {
+    cpu_model: string; cpu_cores: number; mem_total: number; mem_free: number;
+    disk_path: string; disk_free: number; gpus?: GPUInfo[]; warnings?: string[];
+  };
+  metrics: Metrics;
+  rpc: { available: boolean; devices: number; binary?: string; version?: string; error?: string };
+  models?: { name: string; size_bytes: number; layers: number; quant?: string }[];
+  links?: { kind: string; ip: string; interface?: string }[];
+};
 type ClusterInfo = {
   id: string; name: string; version: string; protocol: number; coordinator: string;
   port: number; host?: string; nodes: number; started_at: string; tls: boolean;
 };
-type ClusterNode = {
-  id: string; name: string; role: string; os: string; arch: string; version: string;
-  host: string; api_port: number; state: string; compute: boolean;
-  hardware: {
-    cpu_model: string; cpu_cores: number; mem_total: number; mem_free: number;
-    gpus?: { index: number; name: string; backend: string; vram_total: number; vram_free: number }[];
-  };
-  rpc: { available: boolean; devices: number };
-  models?: { name: string; size_bytes: number; layers: number; quant?: string }[];
-};
-type Job = {
-  id: string; model: string; mode: string; state: string; tokens: number;
-  created_at: string; ended_at?: string; error?: string;
-};
-type LocalModel = {
-  name: string; format: string; size_bytes: number; quant?: string; layers?: number;
-  abs_path: string; gguf?: { quant?: string; layers?: number; context?: number };
-};
-type ModelView = { name: string; size_bytes: number; layers: number; quant?: string; nodes: string[] };
-type InstalledPlugin = {
-  name: string; version: string; description: string; author: string; repo: string;
-  branch: string; archive_sha256: string; installed_at: string; main?: string;
-  web?: { panel?: string };
-};
-type MarketPlugin = {
-  name: string; author: string; repo: string; description: string; branch?: string; tags?: string[];
-};
-type MarketModel = {
-  name: string; author: string; url: string; quant?: string; context?: number;
-  size?: number; sha256?: string; description: string;
-};
-type SystemInfo = {
-  version: string; os: string; arch: string; data_dir: string; models_dir: string;
-  plugins_dir: string; web_dir: string; web_installed: boolean; market_url: string;
-  hardware: ClusterNode["hardware"] & { disk_free: number; warnings?: string[] };
-};
 
-const $ = <T extends HTMLElement = HTMLElement>(sel: string): T => {
-  const el = document.querySelector(sel);
-  if (!el) throw new Error("missing element " + sel);
+const $ = <T extends HTMLElement = HTMLElement>(s: string): T => {
+  const el = document.querySelector(s);
+  if (!el) throw new Error("missing " + s);
   return el as T;
 };
-
-const S = {
-  info: null as ClusterInfo | null,
-  nodes: [] as ClusterNode[],
-  jobs: [] as Job[],
-  models: [] as ModelView[],
-  local: [] as LocalModel[],
-  plugins: [] as InstalledPlugin[],
-  marketPlugins: [] as MarketPlugin[],
-  marketModels: [] as MarketModel[],
-  system: null as SystemInfo | null,
-  joinCode: "",
-  view: "overview",
-  busy: false,
-};
-
 const esc = (v: unknown): string =>
   String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 
-const fmtBytes = (n: number): string => {
-  if (!n || n < 0) return "-";
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+function bytes(n: number): string {
+  if (!n || n <= 0) return "—";
+  const u = ["B", "KiB", "MiB", "GiB", "TiB"];
   let v = n, i = 0;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
-};
-
-const fmtTime = (s?: string): string => {
-  if (!s) return "-";
-  const d = new Date(s);
-  if (Number.isNaN(d.getTime())) return "-";
-  return d.toLocaleString();
-};
-
-class AuthError extends Error {}
-class ApiError extends Error {
-  constructor(message: string, readonly status: number) { super(message); }
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)} ${u[i]}`;
 }
+function bitrate(bps: number): string {
+  if (!bps || bps <= 0) return "0";
+  if (bps >= 1e9) return (bps / 1e9).toFixed(2) + " Gbps";
+  if (bps >= 1e6) return (bps / 1e6).toFixed(1) + " Mbps";
+  if (bps >= 1e3) return (bps / 1e3).toFixed(0) + " Kbps";
+  return bps.toFixed(0) + " bps";
+}
+function mbps(mbps: number): string {
+  if (!mbps || mbps <= 0) return "—";
+  if (mbps >= 1000) return (mbps / 1000).toFixed(mbps % 1000 ? 2 : 0) + " Gbps";
+  return mbps.toFixed(0) + " Mbps";
+}
+function clock(mhz: number): string {
+  if (!mhz || mhz <= 0) return "—";
+  return (mhz / 1000).toFixed(2) + " GHz";
+}
+function timeText(s?: string): string {
+  if (!s) return "—";
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime()) || d.getFullYear() < 2000) return "—";
+  return d.toLocaleString();
+}
+const clamp = (n: number): number => Math.max(0, Math.min(100, Number.isFinite(n) ? n : 0));
+
+const state = {
+  info: null as ClusterInfo | null,
+  nodes: [] as ClusterNode[],
+  selected: localStorage.getItem("maio.node") || "",
+  timer: 0,
+  busy: false,
+};
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -91,111 +83,252 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
     ...init,
   });
-  if (res.status === 401) {
-    if (!path.endsWith("/v1/web/login")) showLogin("登录已过期，请重新输入 Token");
-    throw new AuthError("登录已过期");
+  if (res.status === 401 && !path.endsWith("/v1/web/login")) {
+    showLogin("登录已过期，请重新输入 Token");
+    throw new Error("unauthorized");
   }
   const text = await res.text();
   let data: any = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
-  if (!res.ok) throw new ApiError(data?.error || `HTTP ${res.status}`, res.status);
+  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
   return data as T;
-}
-
-let toastTimer = 0;
-function toast(message: string, bad = false): void {
-  const el = $("#toast");
-  el.textContent = message;
-  el.classList.toggle("bad", bad);
-  el.hidden = false;
-  window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => { el.hidden = true; }, 4200);
 }
 
 function showLogin(message = ""): void {
   $("#app").hidden = true;
   $("#login").hidden = false;
   $("#login-error").textContent = message;
-  renderRecent();
+  window.clearInterval(state.timer);
 }
-
 function showApp(): void {
   $("#login").hidden = true;
   $("#app").hidden = false;
-  const server = location.origin;
-  const recent = loadRecent();
-  if (S.info && !recent.includes(server)) {
-    recent.unshift(server);
-    localStorage.setItem("maio.recent", JSON.stringify(recent.slice(0, 5)));
-  }
 }
-
-function loadRecent(): string[] {
-  try {
-    const raw = localStorage.getItem("maio.recent");
-    return raw ? (JSON.parse(raw) as string[]).filter((x) => typeof x === "string") : [];
-  } catch { return []; }
-}
-
-function renderRecent(): void {
-  const list = loadRecent();
-  $("#login-recent").hidden = list.length === 0;
-  $("#login-recent-list").innerHTML = list
-    .map((u) => `<button type="button" data-server="${esc(u)}">${esc(u.replace(/^https?:\/\//, ""))}</button>`)
-    .join("");
-  for (const btn of document.querySelectorAll<HTMLButtonElement>("#login-recent-list button")) {
-    btn.onclick = () => {
-      ($("#login-server") as HTMLInputElement).value = btn.dataset.server || "";
-    };
-  }
-}
-
-/* ---------- boot / auth ---------- */
 
 async function boot(): Promise<void> {
   try {
-    const me = await api<{ ok: boolean; cluster: ClusterInfo }>("/v1/web/me");
-    S.info = me.cluster;
+    await api("/v1/web/me");
     showApp();
-    await refreshAll();
-    switchView("overview");
-  } catch (err) {
-    if (err instanceof AuthError) showLogin();
-    else showLogin("无法连接协调者：" + (err as Error).message);
+    await refresh();
+    window.clearInterval(state.timer);
+    state.timer = window.setInterval(() => { void refresh(true); }, 3000);
+  } catch (e) {
+    showLogin((e as Error).message === "unauthorized" ? "" : (e as Error).message);
   }
 }
 
 async function login(token: string): Promise<void> {
-  await api<{ ok: boolean }>("/v1/web/login", {
-    method: "POST",
-    body: JSON.stringify({ token }),
-  });
+  await api("/v1/web/login", { method: "POST", body: JSON.stringify({ token }) });
   await boot();
 }
 
-function initLogin(): void {
-  ($("#login-server") as HTMLInputElement).value = location.origin;
+function selectedNode(): ClusterNode | null {
+  return state.nodes.find((n) => n.id === state.selected) || null;
+}
+
+async function refresh(silent = false): Promise<void> {
+  if (state.busy) return;
+  state.busy = true;
+  try {
+    const [info, nodes] = await Promise.all([
+      api<ClusterInfo>("/v1/info"),
+      api<{ nodes: ClusterNode[] }>("/v1/nodes"),
+    ]);
+    state.info = info;
+    state.nodes = nodes.nodes || [];
+    if (!state.nodes.some((n) => n.id === state.selected)) {
+      const online = state.nodes.find((n) => n.state === "online") || state.nodes[0];
+      state.selected = online?.id || "";
+      if (state.selected) localStorage.setItem("maio.node", state.selected);
+    }
+    render();
+  } catch (e) {
+    if (!silent) showLogin((e as Error).message);
+  } finally {
+    state.busy = false;
+  }
+}
+
+function loadInfo(n: ClusterNode): { pct: number; state: string; color: string } {
+  const m = n.metrics || ({} as Metrics);
+  let pct = m.load_percent || 0;
+  if (!pct) {
+    pct = Math.max(m.cpu_percent || 0, m.mem_percent || 0, ...(m.gpus || []).map((g) => g.vram_percent || 0));
+  }
+  pct = clamp(pct);
+  const label = pct < 50 ? "流畅" : pct <= 90 ? "平稳" : "繁忙";
+  const color = pct < 50 ? "var(--green)" : pct <= 90 ? "var(--amber)" : "var(--red)";
+  return { pct, state: label, color };
+}
+
+function gauge(percent: number, unit: string, color: string): string {
+  const p = clamp(percent);
+  const c = 2 * Math.PI * 52;
+  const offset = c * (1 - p / 100);
+  return `<svg class="gauge" viewBox="0 0 120 120" role="img" aria-label="${p.toFixed(0)}%">
+    <circle class="track" cx="60" cy="60" r="52"></circle>
+    <circle class="value" cx="60" cy="60" r="52" stroke="${color}"
+      stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${offset.toFixed(1)}"></circle>
+    <text class="pct" x="60" y="64">${p.toFixed(0)}%</text>
+    <text class="unit" x="60" y="82">${esc(unit)}</text>
+  </svg>`;
+}
+
+function metricCard(title: string, percent: number, unit: string, color: string,
+  primary: string, sub: string, stateText = "", stateClass = ""): string {
+  return `<article class="metric">
+    <div class="metric-title">${esc(title)}</div>
+    ${gauge(percent, unit, color)}
+    ${stateText ? `<div class="state ${stateClass}">${esc(stateText)}</div>` : ""}
+    <div class="primary-value">${primary}</div>
+    <div class="sub">${sub}</div>
+  </article>`;
+}
+
+function render(): void {
+  const info = state.info;
+  const nodes = state.nodes;
+  const online = nodes.filter((n) => n.state === "online").length;
+  $("#node-count").textContent = `${online}/${nodes.length}`;
+  $("#app-version").textContent = info ? `v${info.version}` : "v—";
+
+  const sel = $("#node-select") as HTMLSelectElement;
+  sel.innerHTML = nodes.length
+    ? nodes.map((n) => `<option value="${esc(n.id)}" ${n.id === state.selected ? "selected" : ""}>${esc(n.name)} · ${esc(n.role)} · ${esc(n.state)}</option>`).join("")
+    : `<option value="">没有节点</option>`;
+
+  const n = selectedNode();
+  if (!n) {
+    $("#metrics").innerHTML = `<div class="empty">没有节点。启动协调者后这里会出现节点。</div>`;
+    $("#config-body").innerHTML = `<div class="empty">没有可显示的节点配置。</div>`;
+    $("#config-hint").textContent = "";
+    return;
+  }
+
+  const m = n.metrics || ({} as Metrics);
+  const load = loadInfo(n);
+  const cores = n.hardware.cpu_cores || 0;
+  const usedCores = cores * clamp(m.cpu_percent) / 100;
+  const vram = (m.gpus || []).reduce((a, g) => ({
+    used: a.used + (g.vram_used || 0),
+    total: a.total + (g.vram_total || 0),
+    util: Math.max(a.util, g.utilization || 0),
+    bw: Math.max(a.bw, g.pcie_gbs || 0),
+    pct: 0,
+  }), { used: 0, total: 0, util: 0, bw: 0, pct: 0 });
+  vram.pct = vram.total ? 100 * vram.used / vram.total : 0;
+  const rate = (m.rx_bps || 0) + (m.tx_bps || 0);
+  const linkBps = (m.net_link_mbps || 0) * 1e6;
+  const netPct = linkBps > 0 ? 100 * rate / linkBps : 0;
+
+  $("#metrics").innerHTML = [
+    metricCard("负载", load.pct, "负载", load.color,
+      `CPU ${(m.cpu_percent || 0).toFixed(0)}% · 内存 ${(m.mem_percent || 0).toFixed(0)}% · 显存 ${vram.pct.toFixed(0)}%`,
+      "",
+      load.state, load.pct < 50 ? "green" : load.pct <= 90 ? "amber" : "red"),
+    metricCard("CPU", m.cpu_percent || 0, "占用", "var(--accent)",
+      `${usedCores.toFixed(1)} / ${cores} 核`,
+      `频率 <b>${clock(m.cpu_freq_mhz)}</b> / ${clock(m.cpu_freq_max_mhz)}`),
+    metricCard("内存", m.mem_percent || 0, "占用", "var(--green)",
+      `${bytes(m.mem_used)} / ${bytes(m.mem_total)}`,
+      `频率 <b>${m.mem_freq_mhz ? m.mem_freq_mhz + " MHz" : "—"}</b>`),
+    metricCard("显存", vram.pct, "占用", "var(--cyan, #55d6ff)",
+      `${bytes(vram.used)} / ${bytes(vram.total)}`,
+      `带宽 <b>${vram.bw ? vram.bw.toFixed(1) + " GB/s" : "—"}</b>`),
+    metricCard("流量", netPct, "带宽", "var(--amber)",
+      `${bitrate(rate)} / ${linkBps ? mbps(m.net_link_mbps) : "—"}`,
+      `↓ <b>${bitrate(m.rx_bps || 0)}</b> · ↑ <b>${bitrate(m.tx_bps || 0)}</b><br>带宽 <b>${m.net_link_mbps ? mbps(m.net_link_mbps) : "—"}</b>`),
+  ].join("");
+
+  renderConfig(n);
+}
+
+function renderConfig(n: ClusterNode): void {
+  const m = n.metrics || ({} as Metrics);
+  const port = n.api_port || (n.role === "coordinator" ? (state.info?.port || 0) : 0);
+  const addr = port ? `${n.host}:${port}` : n.host;
+  const gpus = m.gpus && m.gpus.length
+    ? m.gpus.map((g) => {
+        const info = (n.hardware.gpus || []).find((x) => x.index === g.index);
+        return `<div class="gpu">
+          <div class="gpu-head">GPU ${g.index} · ${esc(info?.name || "unknown")}
+            <span>${esc(info?.backend || "")}</span></div>
+          <dl class="kv">
+            <dt>显存</dt><dd>${bytes(g.vram_used)} / ${bytes(g.vram_total)} (${g.vram_percent.toFixed(1)}%)</dd>
+            <dt>利用率</dt><dd>${g.utilization.toFixed(0)}%</dd>
+            <dt>显存频率</dt><dd>${g.mem_clock_mhz ? g.mem_clock_mhz + " MHz" : "—"}</dd>
+            <dt>PCIe</dt><dd>${g.pcie_gen ? `Gen${g.pcie_gen} x${g.pcie_width} · ${g.pcie_gbs.toFixed(1)} GB/s` : "—"}</dd>
+            <dt>驱动</dt><dd>${esc(info?.driver || "—")}</dd>
+            <dt>计算能力</dt><dd>${esc(info?.compute || "—")}</dd>
+          </dl>
+        </div>`;
+      }).join("")
+    : (n.hardware.gpus || []).map((g) => `<div class="gpu">
+        <div class="gpu-head">GPU ${g.index} · ${esc(g.name)}<span>${esc(g.backend)}</span></div>
+        <dl class="kv">
+          <dt>显存</dt><dd>${bytes(g.vram_total)}（空闲 ${bytes(g.vram_free)}）</dd>
+          <dt>驱动</dt><dd>${esc(g.driver || "—")}</dd>
+          <dt>计算能力</dt><dd>${esc(g.compute || "—")}</dd>
+        </dl>
+      </div>`).join("");
+
+  const modelList = (n.models || []).length
+    ? (n.models || []).map((x) => `${esc(x.name)}${x.quant ? ` (${esc(x.quant)})` : ""}`).join("、")
+    : "—";
+  const links = (n.links || []).map((l) => `${esc(l.kind)} ${esc(l.ip)}${l.interface ? ` (${esc(l.interface)})` : ""}`).join("；") || "—";
+  const warnings = (n.hardware.warnings || []).length
+    ? `<div class="config-section"><h3>警告</h3><div class="sub">${n.hardware.warnings!.map(esc).join("<br>")}</div></div>`
+    : "";
+
+  $("#config-hint").textContent = `节点 ${n.name} · 最后心跳 ${timeText(n.last_seen)}`;
+  $("#config-body").innerHTML = `
+    <div class="config-section">
+      <h3>节点</h3>
+      <dl class="kv">
+        <dt>名称</dt><dd>${esc(n.name)}</dd>
+        <dt>节点 ID</dt><dd>${esc(n.id)}</dd>
+        <dt>角色 / 状态</dt><dd>${esc(n.role)} / ${esc(n.state)}</dd>
+        <dt>地址</dt><dd>${esc(addr)}</dd>
+        <dt>系统</dt><dd>${esc(n.os)} / ${esc(n.arch)}</dd>
+        <dt>版本</dt><dd>${esc(n.version)} (protocol ${n.protocol})</dd>
+        <dt>加入 / 心跳</dt><dd>${timeText(n.joined_at)} / ${timeText(n.last_seen)}</dd>
+        <dt>RPC</dt><dd>${n.rpc.available ? "online" : "off"}${n.rpc.error ? ` · ${esc(n.rpc.error)}` : ""}</dd>
+        <dt>链路</dt><dd>${links}</dd>
+        <dt>模型</dt><dd>${modelList}</dd>
+      </dl>
+    </div>
+    <div class="config-section">
+      <h3>CPU / 内存 / 磁盘</h3>
+      <dl class="kv">
+        <dt>CPU 型号</dt><dd>${esc(n.hardware.cpu_model)}</dd>
+        <dt>核心</dt><dd>${n.hardware.cpu_cores}</dd>
+        <dt>频率</dt><dd>${clock(m.cpu_freq_mhz)} / 最大 ${clock(m.cpu_freq_max_mhz)}</dd>
+        <dt>内存</dt><dd>${bytes(m.mem_used)} / ${bytes(m.mem_total)}（可用 ${bytes(n.hardware.mem_free)}）</dd>
+        <dt>内存频率</dt><dd>${m.mem_freq_mhz ? m.mem_freq_mhz + " MHz" : "—"}</dd>
+        <dt>磁盘</dt><dd>${esc(n.hardware.disk_path)} · 可用 ${bytes(n.hardware.disk_free)}</dd>
+      </dl>
+    </div>
+    <div class="config-section">
+      <h3>GPU（${(n.hardware.gpus || []).length}）</h3>
+      <div class="gpu-list">${gpus || `<div class="empty">没有检测到 GPU</div>`}</div>
+    </div>
+    ${warnings}`;
+}
+
+function init(): void {
   $("#login-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const server = ($("#login-server") as HTMLInputElement).value.trim();
     const token = ($("#login-token") as HTMLInputElement).value.trim();
     const err = $("#login-error");
     err.textContent = "";
-    if (!token) { err.textContent = "请输入集群 Token"; return; }
-    let target: URL;
-    try { target = new URL(server || location.origin); } catch { err.textContent = "地址格式不对"; return; }
-    if (target.origin !== location.origin) {
-      location.href = target.origin + "/?login=1";
-      return;
-    }
+    if (!token) { err.textContent = "请输入 Token"; return; }
     const btn = $("#login-form button[type=submit]") as HTMLButtonElement;
     btn.disabled = true;
     try {
       await login(token);
       ($("#login-token") as HTMLInputElement).value = "";
     } catch (e) {
-      err.textContent = e instanceof ApiError && e.status === 401
-        ? "Token 不正确" : (e as Error).message;
+      err.textContent = (e as Error).message;
     } finally {
       btn.disabled = false;
     }
@@ -204,437 +337,12 @@ function initLogin(): void {
     try { await api("/v1/web/logout", { method: "POST" }); } catch { /* ignore */ }
     showLogin();
   });
-}
-
-/* ---------- refresh ---------- */
-
-const safe = async <T,>(p: Promise<T>, fallback: T): Promise<T> => {
-  try { return await p; } catch { return fallback; }
-};
-
-async function refreshAll(): Promise<void> {
-  const [info, nodes, jobs, models, local, plugins, system, join] = await Promise.all([
-    api<ClusterInfo>("/v1/info"),
-    api<{ nodes: ClusterNode[] }>("/v1/nodes"),
-    api<{ jobs: Job[] }>("/v1/jobs"),
-    safe(api<{ models: ModelView[] }>("/v1/models"), { models: [] }),
-    safe(api<{ models: LocalModel[] }>("/v1/models/local"), { models: [] }),
-    safe(api<{ plugins: InstalledPlugin[] }>("/v1/plugins"), { plugins: [] }),
-    safe(api<SystemInfo>("/v1/system"), null as unknown as SystemInfo),
-    safe(api<{ code: string }>("/v1/cluster/join-code"), { code: "" }),
-  ]);
-  S.info = info;
-  S.nodes = nodes.nodes || [];
-  S.jobs = jobs.jobs || [];
-  S.models = models.models || [];
-  S.local = local.models || [];
-  S.plugins = plugins.plugins || [];
-  S.system = system;
-  S.joinCode = join.code || "";
-  render();
-}
-
-async function refreshMarket(force = false): Promise<void> {
-  const q = force ? "?refresh=1" : "";
-  const [p, m] = await Promise.all([
-    api<{ plugins: MarketPlugin[]; base_url: string }>("/v1/market/plugins" + q),
-    api<{ models: MarketModel[]; base_url: string }>("/v1/market/models" + q),
-  ]);
-  S.marketPlugins = p.plugins || [];
-  S.marketModels = m.models || [];
-  renderMarket(p.base_url || "");
-  renderModels();
-}
-
-/* ---------- render ---------- */
-
-function render(): void {
-  const info = S.info;
-  if (!info) return;
-  $("#cluster-chip").textContent = `${info.name} · ${info.nodes} 节点`;
-  $("#cluster-sub").textContent =
-    `${info.id} · protocol ${info.protocol} · ${info.tls ? "TLS" : "plain HTTP"} · ${info.host || "?"}:${info.port}`;
-  renderOverview();
-  renderChatModels();
-  renderModels();
-  renderPlugins();
-  renderSettings();
-}
-
-function renderOverview(): void {
-  const online = S.nodes.filter((n) => n.state === "online").length;
-  const gpus = S.nodes.reduce((a, n) => a + (n.hardware.gpus?.length || 0), 0)
-    || (S.system?.hardware.gpus?.length || 0);
-  $("#overview-cards").innerHTML = [
-    ["节点", `${online}/${S.nodes.length}`, "在线 / 总数"],
-    ["模型", String(S.models.length), "集群可见"],
-    ["插件", String(S.plugins.length), "已安装"],
-    ["GPU", String(gpus), "集群加速卡"],
-    ["版本", S.info?.version || "-", `protocol ${S.info?.protocol || "-"}`],
-  ].map(([k, v, s]) => `<div class="card"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div><div class="s">${esc(s)}</div></div>`).join("");
-
-  $("#nodes-count").textContent = `${S.nodes.length} 台`;
-  $("#nodes-table").innerHTML = S.nodes.length ? `<table>
-    <thead><tr><th>节点</th><th>角色</th><th>状态</th><th>硬件</th><th>RPC</th></tr></thead>
-    <tbody>${S.nodes.map((n) => `<tr>
-      <td><strong>${esc(n.name)}</strong><br><small class="muted">${esc(n.host)}:${n.api_port}</small></td>
-      <td>${esc(n.role)}</td>
-      <td><span class="badge ${n.state === "online" ? "ok" : "bad"}">${esc(n.state)}</span></td>
-      <td>${esc(n.hardware.gpus?.length ? n.hardware.gpus.map((g) => `${g.backend}:${g.name}`).join(", ") : "cpu")}
-        <br><small class="muted">${esc(fmtBytes(n.hardware.mem_total))} RAM</small></td>
-      <td>${n.rpc.available ? `<span class="badge ok">${n.rpc.devices} dev</span>` : `<span class="badge">off</span>`}</td>
-    </tr>`).join("")}</tbody></table>` : `<div class="empty">还没有节点。启动协调者后这里会出现本机节点。</div>`;
-
-  $("#jobs-count").textContent = `${S.jobs.length} 个`;
-  $("#jobs-list").innerHTML = S.jobs.length ? S.jobs.slice(0, 8).map((j) => `
-    <div class="job">
-      <div><strong>${esc(j.model)}</strong> <small>${esc(j.mode)} · ${esc(j.id.slice(0, 12))}</small></div>
-      <div><span class="badge ${j.state === "done" ? "ok" : j.state === "failed" ? "bad" : ""}">${esc(j.state)}</span></div>
-      <small>${esc(fmtTime(j.created_at))} · ${j.tokens} tokens${j.error ? " · " + esc(j.error) : ""}</small>
-    </div>`).join("") : `<div class="empty">还没有任务。</div>`;
-
-  renderHardware();
-}
-
-function renderHardware(): void {
-  const hw = S.system?.hardware;
-  if (!hw) { $("#hardware").innerHTML = `<div class="empty">硬件信息不可用。</div>`; return; }
-  const gpuHtml = (hw.gpus || []).map((g) => `<div class="hw">
-      <div class="k">${esc(g.backend)} #${g.index}</div>
-      <div class="v">${esc(g.name)}</div>
-      <div class="k">${esc(fmtBytes(g.vram_free))} free / ${esc(fmtBytes(g.vram_total))}</div>
-    </div>`).join("");
-  $("#hardware").innerHTML = `
-    <div class="hw"><div class="k">CPU</div><div class="v">${esc(hw.cpu_model)}</div><div class="k">${hw.cpu_cores} cores</div></div>
-    <div class="hw"><div class="k">内存</div><div class="v">${esc(fmtBytes(hw.mem_free))} free</div><div class="k">${esc(fmtBytes(hw.mem_total))} total</div></div>
-    <div class="hw"><div class="k">磁盘</div><div class="v">${esc(fmtBytes(hw.disk_free))} free</div><div class="k">${esc(S.system?.models_dir || "")}</div></div>
-    ${gpuHtml || `<div class="hw"><div class="k">GPU</div><div class="v">cpu only</div><div class="k">未检测到加速卡</div></div>`}`;
-}
-
-function renderChatModels(): void {
-  const sel = $("#chat-model") as HTMLSelectElement;
-  const names = Array.from(new Set([...S.local.map((m) => m.name), ...S.models.map((m) => m.name)]));
-  const prev = sel.value;
-  sel.innerHTML = names.length
-    ? names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("")
-    : `<option value="">没有可用模型</option>`;
-  if (names.includes(prev)) sel.value = prev;
-}
-
-function renderModels(): void {
-  $("#local-models-count").textContent = `${S.local.length} 个`;
-  $("#local-models").innerHTML = S.local.length ? `<table>
-    <thead><tr><th>名称</th><th>量化</th><th>层</th><th>大小</th><th>路径</th></tr></thead>
-    <tbody>${S.local.map((m) => `<tr>
-      <td><strong>${esc(m.name)}</strong></td>
-      <td>${esc(m.gguf?.quant || "-")}</td>
-      <td>${m.gguf?.layers ?? "-"}</td>
-      <td>${esc(fmtBytes(m.size_bytes))}</td>
-      <td><small class="muted">${esc(m.abs_path)}</small></td>
-    </tr>`).join("")}</tbody></table>` : `<div class="empty">还没有模型。用右侧“拉取模型”从市场下载。</div>`;
-  const pull = $("#pull-market") as HTMLSelectElement;
-  const prev = pull.value;
-  pull.innerHTML = `<option value="">— 选择市场模型 —</option>` +
-    S.marketModels.map((m) => `<option value="${esc(m.name)}">${esc(m.name)} · ${esc(m.quant || "")}</option>`).join("");
-  if (prev) pull.value = prev;
-}
-
-function renderPlugins(): void {
-  $("#plugins-count").textContent = `${S.plugins.length} 个`;
-  $("#plugins-list").innerHTML = S.plugins.length ? S.plugins.map((p) => `
-    <div class="plugin">
-      <div class="row"><h4>${esc(p.name)} <span class="badge">${esc(p.version)}</span></h4>
-        <span class="muted small">${esc(p.author || "")}</span></div>
-      <p>${esc(p.description || "—")}</p>
-      <code>${esc(p.repo)}</code>
-      <div class="actions">
-        <button class="ghost" data-plugin-update="${esc(p.name)}">更新</button>
-        <button class="ghost" data-plugin-remove="${esc(p.name)}">删除</button>
-      </div>
-    </div>`).join("") : `<div class="empty">还没有插件。去“市场”安装第一个。</div>`;
-  bindPluginActions();
-}
-
-function renderMarket(baseUrl: string): void {
-  $("#market-base").textContent = baseUrl;
-  const installed = new Set(S.plugins.map((p) => p.name));
-  $("#market-plugins").innerHTML = S.marketPlugins.length ? S.marketPlugins.map((p) => `
-    <div class="plugin">
-      <div class="row"><h4>${esc(p.name)}</h4><span class="muted small">${esc(p.author)}</span></div>
-      <p>${esc(p.description)}</p>
-      <code>${esc(p.repo)}</code>
-      <div class="actions">
-        <button class="primary" data-market-install="${esc(p.name)}" ${installed.has(p.name) ? "disabled" : ""}>
-          ${installed.has(p.name) ? "已安装" : "安装"}
-        </button>
-      </div>
-    </div>`).join("") : `<div class="empty">市场为空，或暂时无法访问。</div>`;
-  $("#market-models").innerHTML = S.marketModels.length ? `<table>
-    <thead><tr><th>名称</th><th>作者</th><th>量化</th><th>上下文</th><th>说明</th><th></th></tr></thead>
-    <tbody>${S.marketModels.map((m) => `<tr>
-      <td><strong>${esc(m.name)}</strong></td>
-      <td>${esc(m.author)}</td>
-      <td>${esc(m.quant || "-")}</td>
-      <td>${m.context || "-"}</td>
-      <td><small class="muted">${esc(m.description)}</small></td>
-      <td><button class="ghost" data-market-pull="${esc(m.name)}">下载</button></td>
-    </tr>`).join("")}</tbody></table>` : `<div class="empty">模型市场为空，或暂时无法访问。</div>`;
-  bindMarketActions();
-}
-
-function renderSettings(): void {
-  const i = S.info;
-  if (!i) return;
-  $("#settings-cluster").innerHTML = [
-    ["名称", i.name], ["ID", i.id], ["版本", i.version], ["协议", i.protocol],
-    ["协调者", `${i.host || "?"}:${i.port}`], ["节点", i.nodes], ["TLS", i.tls ? "on" : "off"],
-    ["启动", fmtTime(i.started_at)],
-  ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
-  const s = S.system;
-  $("#settings-paths").innerHTML = s ? [
-    ["数据目录", s.data_dir], ["模型目录", s.models_dir], ["插件目录", s.plugins_dir],
-    ["Web 目录", s.web_dir], ["Web 已安装", s.web_installed ? "yes" : "no（maio web install）"],
-    ["市场地址", s.market_url],
-  ].map(([k, v]) => `<dt>${esc(k)}</dt><dd><code>${esc(v)}</code></dd>`).join("") : "";
-  $("#join-code").textContent = S.joinCode
-    ? `maio cluster join '${S.joinCode}'`
-    : "无法获取加入码（需要协调者在线）";
-}
-
-/* ---------- actions ---------- */
-
-function bindPluginActions(): void {
-  for (const el of document.querySelectorAll<HTMLButtonElement>("[data-plugin-update]")) {
-    el.onclick = async () => {
-      const name = el.dataset.pluginUpdate!;
-      el.disabled = true;
-      try {
-        await api(`/v1/plugins/${encodeURIComponent(name)}/update`, { method: "POST" });
-        toast(`已更新 ${name}`);
-        await refreshAll();
-      } catch (e) { toast((e as Error).message, true); el.disabled = false; }
-    };
-  }
-  for (const el of document.querySelectorAll<HTMLButtonElement>("[data-plugin-remove]")) {
-    el.onclick = async () => {
-      const name = el.dataset.pluginRemove!;
-      if (!confirm(`删除插件 ${name}？`)) return;
-      el.disabled = true;
-      try {
-        await api(`/v1/plugins/${encodeURIComponent(name)}`, { method: "DELETE" });
-        toast(`已删除 ${name}`);
-        await refreshAll();
-      } catch (e) { toast((e as Error).message, true); el.disabled = false; }
-    };
-  }
-}
-
-function bindMarketActions(): void {
-  for (const el of document.querySelectorAll<HTMLButtonElement>("[data-market-install]")) {
-    el.onclick = async () => {
-      const name = el.dataset.marketInstall!;
-      el.disabled = true;
-      el.textContent = "安装中…";
-      try {
-        await api("/v1/plugins/install", { method: "POST", body: JSON.stringify({ name }) });
-        toast(`已安装 ${name}`);
-        await refreshAll();
-        await refreshMarket();
-      } catch (e) { toast((e as Error).message, true); el.disabled = false; el.textContent = "安装"; }
-    };
-  }
-  for (const el of document.querySelectorAll<HTMLButtonElement>("[data-market-pull]")) {
-    el.onclick = async () => {
-      const name = el.dataset.marketPull!;
-      el.disabled = true;
-      el.textContent = "下载中…";
-      try {
-        await api("/v1/models/pull", { method: "POST", body: JSON.stringify({ name }) });
-        toast(`已下载 ${name}`);
-        await refreshAll();
-      } catch (e) { toast((e as Error).message, true); el.disabled = false; el.textContent = "下载"; }
-    };
-  }
-}
-
-async function pullModel(name: string, url: string): Promise<void> {
-  const status = $("#pull-status");
-  status.textContent = "下载中…大模型可能需要几分钟";
-  try {
-    await api("/v1/models/pull", { method: "POST", body: JSON.stringify({ name, url }) });
-    status.textContent = "完成";
-    toast(`已下载 ${name}`);
-    await refreshAll();
-  } catch (e) {
-    status.textContent = "";
-    toast((e as Error).message, true);
-  }
-}
-
-/* ---------- chat ---------- */
-
-type ChatTurn = { role: "user" | "bot" | "meta"; text: string };
-const chat: ChatTurn[] = [];
-
-function renderChat(): void {
-  const log = $("#chat-log");
-  log.innerHTML = chat.map((t) => `<div class="msg ${t.role}">${t.role === "bot" ? esc(t.text) : esc(t.text)}</div>`).join("");
-  log.scrollTop = log.scrollHeight;
-}
-
-function pushChat(role: ChatTurn["role"], text: string): HTMLElement {
-  const log = $("#chat-log");
-  const div = document.createElement("div");
-  div.className = `msg ${role}`;
-  div.textContent = text;
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
-  return div;
-}
-
-async function streamJob(id: string, onEvent: (ev: any) => void): Promise<void> {
-  const res = await fetch(`/v1/jobs/${encodeURIComponent(id)}/events`, {
-    credentials: "same-origin",
-    headers: { Accept: "text/event-stream" },
+  $("#node-select").addEventListener("change", () => {
+    state.selected = ($("#node-select") as HTMLSelectElement).value;
+    localStorage.setItem("maio.node", state.selected);
+    render();
   });
-  if (!res.ok || !res.body) throw new Error(`stream HTTP ${res.status}`);
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let idx: number;
-    while ((idx = buf.indexOf("\n\n")) >= 0) {
-      const block = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-      for (const line of block.split("\n")) {
-        if (line.startsWith("data: ")) {
-          try { onEvent(JSON.parse(line.slice(6))); } catch { /* ignore malformed */ }
-        }
-      }
-    }
-  }
+  void boot();
 }
 
-async function sendChat(): Promise<void> {
-  if (S.busy) return;
-  const input = $("#chat-input") as HTMLTextAreaElement;
-  const text = input.value.trim();
-  if (!text) return;
-  const model = ($("#chat-model") as HTMLSelectElement).value;
-  if (!model) { toast("没有可用模型，先拉取一个", true); return; }
-  input.value = "";
-  pushChat("user", text);
-  chat.push({ role: "user", text });
-  const bot = pushChat("bot", "");
-  let out = "";
-  const mode = ($("#chat-mode") as HTMLSelectElement).value;
-  S.busy = true;
-  const btn = $("#chat-form button[type=submit]") as HTMLButtonElement;
-  btn.disabled = true;
-  try {
-    const job = await api<Job>("/v1/jobs", {
-      method: "POST",
-      body: JSON.stringify({ model, prompt: text, mode, max_tokens: 256 }),
-    });
-    await streamJob(job.id, (ev) => {
-      if (ev.type === "token" && typeof ev.text === "string") {
-        out += ev.text;
-        bot.textContent = out;
-        bot.scrollIntoView({ block: "end" });
-      } else if (ev.type === "done") {
-        if (ev.state === "failed") {
-          out += `\n[失败] ${ev.error || ""}`;
-          bot.textContent = out;
-        }
-      }
-    });
-    chat.push({ role: "bot", text: out || "(空回复)" });
-    if (!out) bot.textContent = "(空回复)";
-  } catch (e) {
-    bot.textContent = `[错误] ${(e as Error).message}`;
-    chat.push({ role: "bot", text: `[错误] ${(e as Error).message}` });
-  } finally {
-    S.busy = false;
-    btn.disabled = false;
-  }
-}
-
-/* ---------- view switching ---------- */
-
-const titles: Record<string, string> = {
-  overview: "总览", chat: "对话", models: "模型", plugins: "插件", market: "市场", settings: "设置",
-};
-
-function switchView(view: string): void {
-  S.view = view;
-  for (const el of document.querySelectorAll<HTMLElement>(".view")) el.hidden = true;
-  const target = document.getElementById(`view-${view}`);
-  if (target) target.hidden = false;
-  for (const btn of document.querySelectorAll<HTMLButtonElement>("#nav button")) {
-    btn.classList.toggle("active", btn.dataset.view === view);
-  }
-  $("#view-title").textContent = titles[view] || view;
-  if (view === "market" || view === "models") {
-    if (S.marketModels.length === 0) {
-      refreshMarket().catch((e) => toast((e as Error).message, true));
-    }
-  }
-}
-
-/* ---------- init ---------- */
-
-function initShell(): void {
-  $("#nav").addEventListener("click", (ev) => {
-    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("button[data-view]");
-    if (btn) switchView(btn.dataset.view!);
-  });
-  $("#refresh").addEventListener("click", () => {
-    refreshAll().then(() => toast("已刷新")).catch((e) => toast((e as Error).message, true));
-  });
-  $("#theme").addEventListener("click", () => {
-    const root = document.documentElement;
-    const next = root.dataset.theme === "dark" ? "light" : "dark";
-    root.dataset.theme = next;
-    localStorage.setItem("maio.theme", next);
-  });
-  const saved = localStorage.getItem("maio.theme");
-  if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
-
-  $("#chat-form").addEventListener("submit", (ev) => { ev.preventDefault(); void sendChat(); });
-  $("#chat-input").addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); void sendChat(); }
-  });
-  $("#chat-clear").addEventListener("click", () => {
-    chat.length = 0;
-    $("#chat-log").innerHTML = "";
-  });
-
-  $("#pull-market").addEventListener("change", () => {
-    const name = ($("#pull-market") as HTMLSelectElement).value;
-    (document.querySelector("#pull-name") as HTMLInputElement).value = name;
-  });
-  $("#pull-form").addEventListener("submit", (ev) => {
-    ev.preventDefault();
-    const url = ($("#pull-url") as HTMLInputElement).value.trim();
-    const name = ($("#pull-name") as HTMLInputElement).value.trim();
-    const sel = ($("#pull-market") as HTMLSelectElement).value;
-    if (!url && !sel) { toast("选择市场模型或填写直链", true); return; }
-    void pullModel(sel || name, url);
-  });
-
-  $("#market-refresh").addEventListener("click", () => {
-    refreshMarket(true).then(() => toast("市场已刷新")).catch((e) => toast((e as Error).message, true));
-  });
-  $("#copy-join").addEventListener("click", async () => {
-    const text = $("#join-code").textContent || "";
-    try { await navigator.clipboard.writeText(text); toast("已复制"); }
-    catch { toast("复制失败，请手动选择", true); }
-  });
-}
-
-initLogin();
-initShell();
-void boot();
+init();

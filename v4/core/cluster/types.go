@@ -49,6 +49,7 @@ type Node struct {
 	Host      string            `json:"host"`
 	APIPort   int               `json:"api_port"`
 	Hardware  hardware.Info     `json:"hardware"`
+	Metrics   hardware.Metrics  `json:"metrics"`
 	Links     []netinfo.Address `json:"links,omitempty"`
 	Models    []ModelRef        `json:"models"`
 	RPC       RPCStatus         `json:"rpc"`
@@ -82,6 +83,7 @@ func (n *Node) Clone() Node {
 	c.Models = append([]ModelRef(nil), n.Models...)
 	c.Hardware.GPUs = append([]hardware.GPU(nil), n.Hardware.GPUs...)
 	c.Hardware.Warnings = append([]string(nil), n.Hardware.Warnings...)
+	c.Metrics.GPUs = append([]hardware.GPUMetrics(nil), n.Metrics.GPUs...)
 	return c
 }
 
@@ -127,6 +129,7 @@ type Heartbeat struct {
 	State   NodeState         `json:"state"`
 	Models  []ModelRef        `json:"models"`
 	RPC     RPCStatus         `json:"rpc"`
+	Metrics hardware.Metrics  `json:"metrics"`
 	Links   []netinfo.Address `json:"links,omitempty"`
 	Host    string            `json:"host,omitempty"`
 	APIPort int               `json:"api_port,omitempty"`

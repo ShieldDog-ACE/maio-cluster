@@ -17,6 +17,7 @@ import (
 
 	"github.com/ShieldDog-ACE/maio-cluster/v4/core/config"
 	"github.com/ShieldDog-ACE/maio-cluster/v4/core/errs"
+	"github.com/ShieldDog-ACE/maio-cluster/v4/core/hardware"
 	"github.com/ShieldDog-ACE/maio-cluster/v4/core/market"
 	"github.com/ShieldDog-ACE/maio-cluster/v4/core/model"
 	"github.com/ShieldDog-ACE/maio-cluster/v4/core/netinfo"
@@ -303,6 +304,10 @@ func (c *Coordinator) heartbeat(hb Heartbeat) error {
 	if hb.Models != nil {
 		m.node.Models = append([]ModelRef(nil), hb.Models...)
 	}
+	if !hb.Metrics.SampledAt.IsZero() {
+		m.node.Metrics = hb.Metrics
+		m.node.Metrics.GPUs = append([]hardware.GPUMetrics(nil), hb.Metrics.GPUs...)
+	}
 	if hb.RPC.Binary != "" || hb.RPC.Available || hb.RPC.Error != "" {
 		m.node.RPC = hb.RPC
 	}
@@ -312,7 +317,9 @@ func (c *Coordinator) heartbeat(hb Heartbeat) error {
 	if hb.Host != "" && isPrivate(hb.Host) {
 		m.node.Host = hb.Host
 	}
-	m.node.APIPort = hb.APIPort
+	if hb.APIPort > 0 {
+		m.node.APIPort = hb.APIPort
+	}
 	return nil
 }
 

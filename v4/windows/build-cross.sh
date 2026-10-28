@@ -3,7 +3,7 @@
 # llama.cpp RPC binaries must be supplied for a fully distributed package.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VERSION="${VERSION:-4.1.1}"
+VERSION="${VERSION:-4.1.2}"
 ARCH="${ARCH:-amd64}"
 OUT="dist/windows-$ARCH"
 RPC_BIN="${RPC_BIN:-}"

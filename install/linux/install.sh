@@ -11,7 +11,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="${MAIO_VERSION:-4.1.1}"
+VERSION="${MAIO_VERSION:-4.1.2}"
 BASE_URL="${MAIO_BASE_URL:-https://github.com/ShieldDog-ACE/maio-cluster/releases/download}"
 SCOPE=user
 FROM=""
@@ -42,7 +42,7 @@ maio 官方命令行安装器 · Linux
 
 安装来源：
   --from PATH         本地安装包目录或 .tar.gz（离线安装）
-  --version V         发布版本（默认 4.1.1）
+  --version V         发布版本（默认 4.1.2）
   --base-url URL      发布下载根地址
   --sha256 HEX        安装包 SHA-256（离线安装时建议提供）
 

@@ -86,7 +86,10 @@ func (a *Adapter) ServiceInstall(spec coreplatform.ServiceSpec) error {
 	if err := runSystemctl(spec.System, args...); err != nil {
 		return err
 	}
-	if err := runSystemctl(spec.System, "enable", "--now", "maio"); err != nil {
+	if err := runSystemctl(spec.System, "enable", "maio"); err != nil {
+		return fmt.Errorf("unit written to %s but enabling it failed: %w", path, err)
+	}
+	if err := runSystemctl(spec.System, "restart", "maio"); err != nil {
 		return fmt.Errorf("unit written to %s but starting it failed: %w", path, err)
 	}
 	return nil

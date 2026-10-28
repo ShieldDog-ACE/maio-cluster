@@ -28,6 +28,15 @@ install/
     └── install-web.sh      # 图形化组件安装器（可选层）
 ```
 
+## Linux 首选：apt
+
+```bash
+curl -fsSL https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@apt-v4.1.1/setup.sh | sudo sh
+```
+
+之后 CLI 更新用 `maio update`，模型用 `maio pull`，插件用 `maio install`。
+本目录的 `linux/install.sh` 保留给无 apt 的系统或用户级安装。
+
 ## 快速开始
 
 ```bash

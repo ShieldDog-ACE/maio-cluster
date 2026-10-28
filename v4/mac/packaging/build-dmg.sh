@@ -2,7 +2,7 @@
 # Build a macOS .dmg containing the .pkg and the quick-view APK.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-VERSION="${VERSION:-4.1.1}"
+VERSION="${VERSION:-4.1.2}"
 PKG="dist/maio-cluster-$VERSION.pkg"
 [[ -f "$PKG" ]] || ./mac/packaging/build-pkg.sh
 

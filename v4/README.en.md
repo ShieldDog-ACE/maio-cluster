@@ -29,7 +29,7 @@ live once in `core/`.
 ## Install (Linux, apt)
 
 ```bash
-curl -fsSL https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@apt-v4.1.1/setup.sh | sudo sh
+curl -fsSL https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@apt-v4.1.2/setup.sh | sudo sh
 ```
 
 This adds a flat apt repository and installs `maio-cluster`. After that,

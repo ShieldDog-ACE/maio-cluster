@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Build a flat apt repository for the Linux package.
 #
-#   VERSION=4.1.1 ARCH=amd64 ./linux/packaging/build-apt-repo.sh
+#   VERSION=4.1.2 ARCH=amd64 ./linux/packaging/build-apt-repo.sh
 #
 # Output: dist/apt/{Packages,Release,maio-cluster_<version>_<arch>.deb,setup.sh}
 # The repository is unsigned; setup.sh uses apt's [trusted=yes] for LAN/CI use.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-VERSION="${VERSION:-4.1.1}"
+VERSION="${VERSION:-4.1.2}"
 ARCH="${ARCH:-amd64}"
 OUT="dist/apt"
 DEB="dist/maio-cluster_${VERSION}_${ARCH}.deb"

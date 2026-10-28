@@ -27,10 +27,11 @@ import (
 // Agent is the worker daemon. It joins one coordinator, heartbeats, executes
 // commands and owns the local ggml-rpc-server processes.
 type Agent struct {
-	cfg    *config.Config
-	log    *slog.Logger
-	models *model.Store
-	hw     hardware.Info
+	cfg     *config.Config
+	log     *slog.Logger
+	models  *model.Store
+	hw      hardware.Info
+	sampler *hardware.Sampler
 
 	client   *cluster.Client
 	nodeID   string
@@ -68,7 +69,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	hw.RPCBin = findRPCBinary(cfg.Agent.RPCBin)
 	hw.LlamaBin = findLlamaBinary(cfg.Agent.LlamaBin)
 	return &Agent{
-		cfg: cfg, log: log, models: store, hw: hw,
+		cfg: cfg, log: log, models: store, hw: hw, sampler: hardware.NewSampler(hw),
 		rpcs: map[int]*rpcProcess{}, engines: map[int]*engineProcess{}, tunnels: map[int]*tunnel{},
 		started: time.Now(),
 	}, nil
@@ -161,12 +162,14 @@ func (a *Agent) join(ctx context.Context) error {
 	node.Role = "worker"
 	if a.localCoordinator {
 		node.Role = "coordinator"
+		node.APIPort = a.cfg.Cluster.Port
 	}
 	node.OS = runtime.GOOS
 	node.Arch = runtime.GOARCH
 	node.Version = version.Version
 	node.Protocol = version.Protocol
 	node.Hardware = a.hw
+	node.Metrics = a.sampler.Sample()
 	node.Compute = a.cfg.Agent.MaxJobs > 0
 	node.RPC = a.rpcStatus()
 	if h, ok := netinfo.BestAdvertise(); ok {
@@ -222,7 +225,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			hb := cluster.Heartbeat{
 				NodeID: a.NodeID(), State: cluster.Online,
 				Models: a.modelRefs(), RPC: a.rpcStatus(),
-				Load: a.load(),
+				Load: a.load(), Metrics: a.sampler.Sample(),
 			}
 			if h, ok := netinfo.BestAdvertise(); ok {
 				hb.Host = h.IP

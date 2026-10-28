@@ -7,7 +7,7 @@
 #   make verify            vet + race tests + two-node e2e
 #
 # Bundle llama.cpp RPC binaries with RPC_BIN=... LLAMA_BIN=...
-VERSION ?= 4.1.1
+VERSION ?= 4.1.2
 RPC_BIN ?=
 LLAMA_BIN ?=
 ANDROID_SDK ?=

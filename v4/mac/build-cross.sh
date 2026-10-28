@@ -4,7 +4,7 @@
 # binary and packaging/build-pkg.sh makes a signed .pkg.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VERSION="${VERSION:-4.1.1}"
+VERSION="${VERSION:-4.1.2}"
 RPC_BIN="${RPC_BIN:-}"
 LLAMA_BIN="${LLAMA_BIN:-}"
 for ARCH in arm64 amd64; do

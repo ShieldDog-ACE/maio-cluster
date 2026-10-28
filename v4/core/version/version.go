@@ -3,7 +3,7 @@ package version
 
 // Version is overridden at build time with
 // -ldflags "-X github.com/ShieldDog-ACE/maio-cluster/v4/core/version.Version=..."
-var Version = "4.1.1-dev"
+var Version = "4.1.2-dev"
 
 // Protocol is the cluster wire protocol version. Peers with a different major
 // version must not join the same cluster.

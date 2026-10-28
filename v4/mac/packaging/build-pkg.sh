@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Build a macOS .pkg installer. Run on macOS after mac/build.sh.
 #
-#   VERSION=4.1.1 ./mac/packaging/build-pkg.sh
+#   VERSION=4.1.2 ./mac/packaging/build-pkg.sh
 #   SIGN_ID="Developer ID Installer: ..." ./mac/packaging/build-pkg.sh
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-VERSION="${VERSION:-4.1.1}"
+VERSION="${VERSION:-4.1.2}"
 OUT="dist"
 STAGE="$OUT/pkg-root"
 SCRIPTS="$OUT/pkg-scripts"
