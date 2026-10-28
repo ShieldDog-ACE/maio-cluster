@@ -286,7 +286,7 @@ function renderDetail(): void {
 
   $("#cards").innerHTML = [
     card("负载", "◇", a.loadPct, loadClass, `${a.loadPct.toFixed(1)}%`, `CPU ${(m.cpu_percent || 0).toFixed(0)}% · 内存 ${(m.mem_percent || 0).toFixed(0)}% · 显存 ${a.pct.toFixed(0)}%`, a.loadState),
-    card("CPU", "▤", cpuPct, "var(--purple)", `${cpuPct.toFixed(1)}%`, `${usedCores.toFixed(1)} / ${n.hardware.cpu_cores} 核 · ${clock(m.cpu_freq_mhz)}<br>${temp(m.cpu_temp_c)} · 功耗 ${watts(m.cpu_power_w)}/${watts(m.cpu_power_max_w)}<br>电源 ${n.hardware.psu_watts ? n.hardware.psu_watts + " W" : "—"}`),
+    card("CPU", "▤", cpuPct, "var(--purple)", `${cpuPct.toFixed(1)}%`, `${usedCores.toFixed(1)} / ${n.hardware.cpu_cores} 核 · ${clock(m.cpu_freq_mhz)}<br>${temp(m.cpu_temp_c)} · 功耗 ${watts(m.cpu_power_w)} / 最大 ${watts(m.cpu_power_max_w)}<br>电源最大 ${n.hardware.psu_watts ? n.hardware.psu_watts + " W" : "—"}`),
     card("内存", "▣", clamp(m.mem_percent || 0), "var(--amber)", `${bytes(m.mem_used)} / ${bytes(m.mem_total)}`, `频率 ${m.mem_freq_mhz ? m.mem_freq_mhz + " MHz" : "—"}`),
     card("显存", "▦", a.pct, "var(--cyan)", `${bytes(a.used)} / ${bytes(a.total)}`, `功耗 ${watts(a.power)} / ${watts(a.limit)} · ${temp(a.temp)}<br>带宽 ${a.bw ? a.bw.toFixed(1) + " GB/s" : "—"}`),
     card("流量", "◈", a.link ? clamp(100 * a.rate / a.link) : 0, "var(--blue)", `${bitrate(a.rate)}/s`, `↑ ${bitrate(m.tx_bps || 0)}/s · ↓ ${bitrate(m.rx_bps || 0)}/s<br>带宽 ${mbps(m.net_link_mbps || 0)}`),
