@@ -7,6 +7,7 @@ package hardware
 import (
 	"context"
 	"encoding/csv"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -39,6 +40,7 @@ type Info struct {
 	SwapFree     uint64   `json:"swap_free"`
 	DiskPath     string   `json:"disk_path"`
 	DiskFree     uint64   `json:"disk_free"`
+	PSUWatts     uint64   `json:"psu_watts"`
 	GPUs         []GPU    `json:"gpus"`
 	Unified      bool     `json:"unified_memory"`
 	Warnings     []string `json:"warnings,omitempty"`
@@ -58,6 +60,7 @@ func Detect(path string) Info {
 		DiskPath: path,
 	}
 	info.CPUCores = runtime.NumCPU()
+	info.PSUWatts = detectPSUWatts()
 	fillOS(&info, path)
 	info.GPUs, info.NvidiaSMI, info.Warnings = detectGPUs(info.Warnings)
 	for i := range info.GPUs {
@@ -105,6 +108,35 @@ func (i Info) DeviceSummary() string {
 		parts = append(parts, g.Backend+":"+g.Name)
 	}
 	return strings.Join(parts, ", ")
+}
+
+func detectPSUWatts() uint64 {
+	if v, err := strconv.ParseUint(strings.TrimSpace(os.Getenv("MAIO_PSU_WATTS")), 10, 64); err == nil && v > 0 {
+		return v
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "dmidecode", "-t", "39").Output()
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.Contains(line, "Max Power Capacity:") {
+			continue
+		}
+		var digits strings.Builder
+		for _, r := range line[strings.Index(line, ":")+1:] {
+			if r >= '0' && r <= '9' {
+				digits.WriteRune(r)
+			} else if digits.Len() > 0 {
+				break
+			}
+		}
+		if v, err := strconv.ParseUint(digits.String(), 10, 64); err == nil {
+			return v
+		}
+	}
+	return 0
 }
 
 func detectGPUs(warnings []string) ([]GPU, string, []string) {

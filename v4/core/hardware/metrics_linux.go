@@ -18,6 +18,7 @@ func samplePlatform(s *Sampler, now time.Time) Metrics {
 	m.CPUFreqMHz = cpuFreqMHz()
 	m.CPUFreqMaxMHz = cpuMaxMHz()
 	m.CPUTempC = cpuTempC()
+	m.CPUPowerW, m.CPUPowerMaxW = cpuPower(s, now)
 	m.MemTotal, m.MemUsed, m.MemPercent = memUsage()
 	if !s.memFreqOK {
 		s.memFreq = detectMemFreq()
@@ -127,6 +128,31 @@ func cpuMaxMHz() float64 {
 	}
 	// Apple/VM guests often have no cpufreq; fall back to the current value.
 	return 0
+}
+
+func cpuPower(s *Sampler, now time.Time) (watts, maxWatts float64) {
+	const base = "/sys/class/powercap/intel-rapl/intel-rapl:0"
+	if data, err := os.ReadFile(base + "/constraint_0_max_power_uw"); err == nil {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(string(data)), 64); err == nil && v > 0 {
+			maxWatts = v / 1e6
+		}
+	}
+	data, err := os.ReadFile(base + "/energy_uj")
+	if err != nil {
+		return 0, maxWatts
+	}
+	energy, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, maxWatts
+	}
+	if !s.prevEnergyAt.IsZero() && now.After(s.prevEnergyAt) && energy >= s.prevEnergy {
+		secs := now.Sub(s.prevEnergyAt).Seconds()
+		if secs > 0 {
+			watts = float64(energy-s.prevEnergy) / 1e6 / secs
+		}
+	}
+	s.prevEnergy, s.prevEnergyAt = energy, now
+	return watts, maxWatts
 }
 
 func cpuTempC() float64 {

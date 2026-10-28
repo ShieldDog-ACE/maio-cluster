@@ -1,61 +1,108 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>maio · 节点状态</title>
+  <title>maio · 我的桌面</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <div id="login" class="login">
-    <form id="login-form" class="login-card" autocomplete="off">
-      <div class="brand">
-        <span class="logo">m</span>
-        <div><h1>maio</h1><p>节点控制台</p></div>
-      </div>
-      <label for="login-token">集群 Token</label>
-      <input id="login-token" type="password" placeholder="粘贴协调者的 Token" spellcheck="false" autocomplete="current-password">
-      <button class="primary" type="submit">进入</button>
-      <p id="login-error" class="error" role="alert"></p>
-    </form>
+    <div class="login-window">
+      <div class="login-bar"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span><span class="login-title">maio 控制台</span></div>
+      <form id="login-form" class="login-card" autocomplete="off">
+        <div class="login-brand"><span class="logo">m</span><div><h1>maio</h1><p>节点控制台</p></div></div>
+        <label for="login-token">集群 Token</label>
+        <input id="login-token" type="password" placeholder="粘贴协调者的 Token" spellcheck="false" autocomplete="current-password">
+        <button class="primary" type="submit">进入桌面</button>
+        <p id="login-error" class="error" role="alert"></p>
+      </form>
+    </div>
   </div>
 
-  <div id="app" class="app" hidden>
-    <aside class="sidebar">
-      <div class="brand">
-        <span class="logo">m</span>
-        <div><strong>maio</strong><small id="app-version">v—</small></div>
+  <div id="app" class="shell" hidden>
+    <div class="frame">
+      <div class="titlebar">
+        <div class="traffic"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+        <div class="window-tabs"><span class="window-tab">首页</span><span class="window-tab active">我的桌面</span></div>
+        <div class="window-right"><span id="app-version">v—</span></div>
       </div>
-      <nav class="nav">
-        <button class="active" type="button">节点状态</button>
-      </nav>
-      <div class="side-foot">
-        <button id="logout" class="link" type="button">退出</button>
+      <div class="frame-body">
+        <aside class="sidebar">
+          <div class="profile"><span class="logo">m</span><div><strong>maio</strong><small>cluster</small></div></div>
+          <nav class="nav">
+            <button class="nav-item active" type="button"><span class="nav-icon">▦</span>我的桌面</button>
+          </nav>
+          <div class="sidebar-foot">
+            <button id="logout" class="link" type="button">退出</button>
+            <span class="muted" id="side-node-count">0/0</span>
+          </div>
+        </aside>
+
+        <main class="content">
+          <section id="desktop-view">
+            <div class="group-tabs" role="tablist">
+              <button class="group-tab active" data-filter="all" type="button">全部节点</button>
+              <button class="group-tab" data-filter="online" type="button">在线</button>
+              <button class="group-tab" data-filter="offline" type="button">离线</button>
+            </div>
+            <div class="toolbar">
+              <button id="refresh" class="icon-btn" type="button" title="刷新">↻</button>
+              <input id="search" class="search" type="search" placeholder="搜索节点名称、IP 或角色">
+              <div class="count-pill"><b id="node-count">0/0</b><span>在线 / 总数</span></div>
+            </div>
+            <div class="table-wrap">
+              <table class="node-table">
+                <thead><tr>
+                  <th>名称</th><th>主机</th><th>状态</th><th>CPU</th><th>内存</th><th>显存</th><th>角色</th><th>操作</th>
+                </tr></thead>
+                <tbody id="nodes-body"></tbody>
+              </table>
+              <div id="empty" class="empty" hidden>没有匹配的节点</div>
+            </div>
+          </section>
+
+          <section id="detail-view" hidden>
+            <div class="detail-head">
+              <button id="back" class="back" type="button">← 我的桌面</button>
+              <div class="detail-title"><h1 id="detail-name">—</h1><span id="detail-sub" class="muted">—</span></div>
+              <span id="detail-state" class="state-badge">—</span>
+            </div>
+
+            <div id="cards" class="cards"></div>
+
+            <div class="panels">
+              <section class="panel">
+                <div class="panel-head"><h2>负载状态</h2><span class="muted">1 / 5 / 15 分钟平均负载</span></div>
+                <div class="load-layout">
+                  <div id="load-chart" class="chart"></div>
+                  <div class="avg-box" id="load-avgs"></div>
+                </div>
+                <dl class="kv compact" id="load-details"></dl>
+              </section>
+
+              <section class="panel">
+                <div class="panel-head"><h2>CPU</h2><span id="cpu-model" class="muted">—</span></div>
+                <div id="cpu-chart" class="chart"></div>
+                <dl class="kv compact" id="cpu-details"></dl>
+              </section>
+
+              <section class="panel">
+                <div class="panel-head"><h2>功耗与温度</h2><span class="muted">2 秒采样</span></div>
+                <div id="power-chart" class="chart"></div>
+                <dl class="kv compact" id="power-details"></dl>
+              </section>
+
+              <section class="panel">
+                <div class="panel-head"><h2>详细配置</h2><span id="config-hint" class="muted"></span></div>
+                <div id="config-body"></div>
+              </section>
+            </div>
+          </section>
+        </main>
       </div>
-    </aside>
-
-    <main class="main">
-      <header class="top">
-        <h1>节点状态</h1>
-        <div class="count">
-          <strong id="node-count">0/0</strong>
-          <span>在线 / 总数</span>
-        </div>
-      </header>
-
-      <section class="node-bar">
-        <label for="node-select">节点</label>
-        <select id="node-select"></select>
-      </section>
-
-      <section id="metrics" class="metrics"></section>
-
-      <section class="config">
-        <div class="config-head"><h2>详细配置</h2><span id="config-hint" class="muted"></span></div>
-        <div id="config-body" class="config-body"></div>
-      </section>
-    </main>
+    </div>
   </div>
 
   <script type="module" src="/app.js"></script>

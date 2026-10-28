@@ -34,6 +34,8 @@ type Metrics struct {
 	MemPercent    float64      `json:"mem_percent"`
 	MemFreqMHz    uint64       `json:"mem_freq_mhz"`
 	CPUTempC      float64      `json:"cpu_temp_c"`
+	CPUPowerW     float64      `json:"cpu_power_w"`
+	CPUPowerMaxW  float64      `json:"cpu_power_max_w"`
 	GPUs          []GPUMetrics `json:"gpus,omitempty"`
 	RXBps         uint64       `json:"rx_bps"`
 	TXBps         uint64       `json:"tx_bps"`
@@ -46,14 +48,16 @@ type Metrics struct {
 type Sampler struct {
 	Info Info
 
-	mu        sync.Mutex
-	prevAt    time.Time
-	prevTotal uint64
-	prevIdle  uint64
-	prevRX    uint64
-	prevTX    uint64
-	memFreq   uint64
-	memFreqOK bool
+	mu           sync.Mutex
+	prevAt       time.Time
+	prevTotal    uint64
+	prevIdle     uint64
+	prevRX       uint64
+	prevTX       uint64
+	prevEnergy   uint64
+	prevEnergyAt time.Time
+	memFreq      uint64
+	memFreqOK    bool
 }
 
 // NewSampler builds a sampler for the detected hardware.
