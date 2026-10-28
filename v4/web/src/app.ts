@@ -306,9 +306,18 @@ function renderDetail(): void {
     <dt>温度</dt><dd>${temp(m.cpu_temp_c)}</dd>
     <dt>功耗</dt><dd>${watts(m.cpu_power_w)} / ${watts(m.cpu_power_max_w)}</dd>`;
 
-  $("#gpu-models").innerHTML = (n.hardware.gpus || []).map((g) =>
-    `<div class="gpu-model"><b>GPU ${g.index}</b><span>${esc(g.name)}</span></div>`
-  ).join("") || `<div class="muted">没有检测到 GPU</div>`;
+  const gpuNames = Array.from(new Set((n.hardware.gpus || []).map((g) => g.name)));
+  $("#gpu-model-head").textContent = gpuNames.length
+    ? `${(n.hardware.gpus || []).length} × ${gpuNames.join(" / ")}`
+    : "没有检测到 GPU";
+  $("#power-chart").innerHTML = lineChart(h, [
+    { key: "gpuPower", color: "var(--purple)" },
+    { key: "cpuPower", color: "var(--cyan)" },
+  ], Math.max(a.max, m.cpu_power_max_w || 0, 1), "W");
+  $("#power-details").innerHTML = `
+    <dt>GPU 功耗</dt><dd>${watts(a.power)} / ${watts(a.limit)}（最大 ${watts(a.max)}）</dd>
+    <dt>CPU 功耗</dt><dd>${watts(m.cpu_power_w)} / ${watts(m.cpu_power_max_w)}</dd>
+    <dt>温度</dt><dd>CPU ${temp(m.cpu_temp_c)} · GPU ${temp(a.temp)} · 显存 ${temp(a.memTemp)}</dd>`;
 
   renderConfig(n);
 }
