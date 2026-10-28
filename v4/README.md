@@ -38,13 +38,13 @@ v4/
 ## 安装（Linux，默认 apt）
 
 ```bash
-curl -fsSL https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@main/setup.sh | sudo sh
+curl -fsSL https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@apt-v4.1.1/setup.sh | sudo sh
 ```
 
 等价于：
 
 ```bash
-echo 'deb [trusted=yes] https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@main ./' | sudo tee /etc/apt/sources.list.d/maio.list
+echo 'deb [trusted=yes] https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@apt-v4.1.1 ./' | sudo tee /etc/apt/sources.list.d/maio.list
 sudo apt update && sudo apt install maio-cluster
 ```
 

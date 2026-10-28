@@ -5,13 +5,13 @@ Flat apt repository for `maio-cluster` on Debian/Ubuntu amd64.
 ## Install
 
 ```sh
-curl -fsSL https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@main/setup.sh | sudo sh
+curl -fsSL https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@apt-v4.1.1/setup.sh | sudo sh
 ```
 
 or manually:
 
 ```sh
-echo 'deb [trusted=yes] https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@main ./' \
+echo 'deb [trusted=yes] https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@apt-v4.1.1 ./' \
   | sudo tee /etc/apt/sources.list.d/maio.list
 sudo apt update
 sudo apt install maio-cluster
