@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>maio · 我的桌面</title>
+  <title>maio · 首页</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
     <div class="login-window">
       <div class="login-bar"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span><span class="login-title">maio 控制台</span></div>
       <form id="login-form" class="login-card" autocomplete="off">
-        <div class="login-brand"><span class="logo">m</span><div><h1>maio</h1><p>节点控制台</p></div></div>
+        <div class="login-brand"><div><h1>maio</h1><p>节点控制台</p></div></div>
         <label for="login-token">集群 Token</label>
         <input id="login-token" type="password" placeholder="粘贴协调者的 Token" spellcheck="false" autocomplete="current-password">
         <button class="primary" type="submit">进入桌面</button>
@@ -25,14 +25,14 @@
     <div class="frame">
       <div class="titlebar">
         <div class="traffic"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
-        <div class="window-tabs"><span class="window-tab">首页</span><span class="window-tab active">我的桌面</span></div>
+        <div class="window-tabs"><span class="window-tab active">首页</span></div>
         <div class="window-right"><span id="app-version">v—</span></div>
       </div>
       <div class="frame-body">
         <aside class="sidebar">
-          <div class="profile"><span class="logo">m</span><div><strong>maio</strong><small>cluster</small></div></div>
+          <div class="profile"><div><strong>maio</strong><small>cluster</small></div></div>
           <nav class="nav">
-            <button class="nav-item active" type="button"><span class="nav-icon">▦</span>我的桌面</button>
+            <button class="nav-item active" type="button"><span class="nav-icon">⌂</span>首页</button>
           </nav>
           <div class="sidebar-foot">
             <button id="logout" class="link" type="button">退出</button>
@@ -65,7 +65,7 @@
 
           <section id="detail-view" hidden>
             <div class="detail-head">
-              <button id="back" class="back" type="button">← 我的桌面</button>
+              <button id="back" class="back" type="button">← 首页</button>
               <div class="detail-title"><h1 id="detail-name">—</h1><span id="detail-sub" class="muted">—</span></div>
               <span id="detail-state" class="state-badge">—</span>
             </div>
@@ -74,11 +74,8 @@
 
             <div class="panels">
               <section class="panel">
-                <div class="panel-head"><h2>负载状态</h2><span class="muted">1 / 5 / 15 分钟平均负载</span></div>
-                <div class="load-layout">
-                  <div id="load-chart" class="chart"></div>
-                  <div class="avg-box" id="load-avgs"></div>
-                </div>
+                <div class="panel-head"><h2>负载状态</h2></div>
+                <div id="load-chart" class="chart"></div>
                 <dl class="kv compact" id="load-details"></dl>
               </section>
 
@@ -89,13 +86,12 @@
               </section>
 
               <section class="panel">
-                <div class="panel-head"><h2>功耗与温度</h2><span class="muted">2 秒采样</span></div>
-                <div id="power-chart" class="chart"></div>
-                <dl class="kv compact" id="power-details"></dl>
+                <div class="panel-head"><h2>GPU</h2></div>
+                <div id="gpu-models" class="gpu-models"></div>
               </section>
 
               <section class="panel">
-                <div class="panel-head"><h2>详细配置</h2><span id="config-hint" class="muted"></span></div>
+                <div class="panel-head"><h2>详细配置</h2></div>
                 <div id="config-body"></div>
               </section>
             </div>

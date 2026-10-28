@@ -131,7 +131,7 @@ function sample(n) {
         t: Date.now(), cpu: m.cpu_percent || 0, mem: m.mem_percent || 0, vram: a.pct, load: a.loadPct,
         rx: m.rx_bps || 0, tx: m.tx_bps || 0, gpuPower: a.power, gpuLimit: a.limit, gpuMax: a.max,
         cpuPower: m.cpu_power_w || 0, cpuMax: m.cpu_power_max_w || 0,
-        cpuTemp: m.cpu_temp_c || 0, gpuTemp: a.temp, psu: n.hardware.psu_watts || 0,
+        cpuTemp: m.cpu_temp_c || 0, gpuTemp: a.temp,
     };
 }
 function record() {
@@ -201,7 +201,7 @@ function renderDesktop() {
         const h = hist(n.id);
         const online = n.state === "online";
         return `<tr data-id="${esc(n.id)}">
-      <td><div class="node-name"><span class="node-avatar">${esc(n.name.slice(0, 1).toUpperCase())}</span>${esc(n.name)}</div></td>
+      <td><div class="node-name">${esc(n.name)}</div></td>
       <td><span class="host">${esc(n.host || "—")}</span></td>
       <td><span class="status ${online ? "" : "off"}"><i></i>${online ? "在线" : "离线"}</span></td>
       <td><div class="cell-metric"><b>${n.hardware.cpu_cores} 核 / ${(n.metrics.cpu_percent || 0).toFixed(1)}%</b>${sparkline(h.map((s) => s.cpu), "var(--purple)")}</div></td>
@@ -226,11 +226,11 @@ function sparkline(values, color) {
     return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.4"/></svg>`;
 }
 function gauge(pct, color) {
-    const p = clamp(pct), c = 2 * Math.PI * 18, off = c * (1 - p / 100);
-    return `<svg class="mini-gauge" viewBox="0 0 46 46">
-    <circle class="track" cx="23" cy="23" r="18"></circle>
-    <circle class="value" cx="23" cy="23" r="18" stroke="${color}" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"></circle>
-    <text x="23" y="25.5">${p.toFixed(0)}%</text></svg>`;
+    const p = clamp(pct), c = 2 * Math.PI * 26, off = c * (1 - p / 100);
+    return `<svg class="mini-gauge" viewBox="0 0 68 68">
+    <circle class="track" cx="34" cy="34" r="26"></circle>
+    <circle class="value" cx="34" cy="34" r="26" stroke="${color}" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"></circle>
+    <text x="34" y="37.5">${p.toFixed(0)}%</text></svg>`;
 }
 function card(title, icon, pct, color, main, sub, stateText = "") {
     return `<article class="card">
@@ -269,22 +269,16 @@ function renderDetail() {
     st.style.color = n.state === "online" ? "var(--green)" : "var(--red)";
     $("#cards").innerHTML = [
         card("负载", "◇", a.loadPct, loadClass, `${a.loadPct.toFixed(1)}%`, `CPU ${(m.cpu_percent || 0).toFixed(0)}% · 内存 ${(m.mem_percent || 0).toFixed(0)}% · 显存 ${a.pct.toFixed(0)}%`, a.loadState),
-        card("CPU", "▤", cpuPct, "var(--purple)", `${cpuPct.toFixed(1)}%`, `${usedCores.toFixed(1)} / ${n.hardware.cpu_cores} 核 · ${clock(m.cpu_freq_mhz)}<br>${temp(m.cpu_temp_c)} · 功耗 ${watts(m.cpu_power_w)} / 最大 ${watts(m.cpu_power_max_w)}<br>电源最大 ${n.hardware.psu_watts ? n.hardware.psu_watts + " W" : "—"}`),
+        card("CPU", "▤", cpuPct, "var(--purple)", `${cpuPct.toFixed(1)}%`, `${usedCores.toFixed(1)} / ${n.hardware.cpu_cores} 核 · ${clock(m.cpu_freq_mhz)}<br>${temp(m.cpu_temp_c)} · 功耗 ${watts(m.cpu_power_w)} / 最大 ${watts(m.cpu_power_max_w)}`),
         card("内存", "▣", clamp(m.mem_percent || 0), "var(--amber)", `${bytes(m.mem_used)} / ${bytes(m.mem_total)}`, `频率 ${m.mem_freq_mhz ? m.mem_freq_mhz + " MHz" : "—"}`),
         card("显存", "▦", a.pct, "var(--cyan)", `${bytes(a.used)} / ${bytes(a.total)}`, `功耗 ${watts(a.power)} / ${watts(a.limit)} · ${temp(a.temp)}<br>带宽 ${a.bw ? a.bw.toFixed(1) + " GB/s" : "—"}`),
         card("流量", "◈", a.link ? clamp(100 * a.rate / a.link) : 0, "var(--blue)", `${bitrate(a.rate)}/s`, `↑ ${bitrate(m.tx_bps || 0)}/s · ↓ ${bitrate(m.rx_bps || 0)}/s<br>带宽 ${mbps(m.net_link_mbps || 0)}`),
     ].join("");
     $("#load-chart").innerHTML = lineChart(h, [{ key: "load", color: "var(--purple)" }], 100, "%");
-    $("#load-avgs").innerHTML = [
-        ["1 分钟", avgWindow(h, 60)],
-        ["5 分钟", avgWindow(h, 300)],
-        ["15 分钟", avgWindow(h, 900)],
-    ].map(([label, v]) => `<div class="avg"><span>${label}平均负载</span><b>${v.toFixed(2)}</b></div>`).join("");
     $("#load-details").innerHTML = `
     <dt>CPU</dt><dd>${(m.cpu_percent || 0).toFixed(1)}%</dd>
     <dt>内存</dt><dd>${(m.mem_percent || 0).toFixed(1)}%</dd>
-    <dt>显存</dt><dd>${a.pct.toFixed(1)}%</dd>
-    <dt>采样</dt><dd>${h.length} 点 / 2 秒</dd>`;
+    <dt>显存</dt><dd>${a.pct.toFixed(1)}%</dd>`;
     $("#cpu-model").textContent = n.hardware.cpu_model;
     $("#cpu-chart").innerHTML = lineChart(h, [{ key: "cpu", color: "var(--purple)" }], 100, "%");
     $("#cpu-details").innerHTML = `
@@ -292,24 +286,8 @@ function renderDetail() {
     <dt>频率</dt><dd>${clock(m.cpu_freq_mhz)} / ${clock(m.cpu_freq_max_mhz)}</dd>
     <dt>温度</dt><dd>${temp(m.cpu_temp_c)}</dd>
     <dt>功耗</dt><dd>${watts(m.cpu_power_w)} / ${watts(m.cpu_power_max_w)}</dd>`;
-    $("#power-chart").innerHTML = lineChart(h, [
-        { key: "gpuPower", color: "var(--purple)" },
-        { key: "cpuPower", color: "var(--cyan)" },
-    ], Math.max(a.max, m.cpu_power_max_w || 0, n.hardware.psu_watts || 0, 1), "W");
-    $("#power-details").innerHTML = `
-    <dt>GPU 功耗</dt><dd>${watts(a.power)} / ${watts(a.limit)}（最大 ${watts(a.max)}）</dd>
-    <dt>CPU 功耗</dt><dd>${watts(m.cpu_power_w)} / ${watts(m.cpu_power_max_w)}</dd>
-    <dt>电源最大</dt><dd>${n.hardware.psu_watts ? n.hardware.psu_watts + " W" : "未检测"}</dd>
-    <dt>温度</dt><dd>CPU ${temp(m.cpu_temp_c)} · GPU ${temp(a.temp)} · 显存 ${temp(a.memTemp)}</dd>`;
+    $("#gpu-models").innerHTML = (n.hardware.gpus || []).map((g) => `<div class="gpu-model"><b>GPU ${g.index}</b><span>${esc(g.name)}</span></div>`).join("") || `<div class="muted">没有检测到 GPU</div>`;
     renderConfig(n);
-}
-function avgWindow(h, seconds) {
-    if (!h.length)
-        return 0;
-    const cutoff = Date.now() - seconds * 1000;
-    const v = h.filter((s) => s.t >= cutoff);
-    const list = v.length ? v : h.slice(-1);
-    return list.reduce((a, s) => a + s.load, 0) / list.length;
 }
 function lineChart(h, series, max, unit) {
     const w = 660, ht = 150, l = 34, r = 8, t = 8, b = 18;
@@ -338,7 +316,7 @@ function renderConfig(n) {
     const addr = port ? `${n.host}:${port}` : n.host;
     const gpus = (m.gpus || []).map((g) => {
         const info = (n.hardware.gpus || []).find((x) => x.index === g.index);
-        return `<div class="gpu"><div class="gpu-head">GPU ${g.index} · ${esc(info?.name || "unknown")}<span>${esc(info?.backend || "")}</span></div>
+        return `<div class="gpu"><div class="gpu-head">GPU ${g.index} · ${esc(info?.name || "unknown")}</div>
       <dl class="kv compact">
         <dt>显存</dt><dd>${bytes(g.vram_used)} / ${bytes(g.vram_total)} (${g.vram_percent.toFixed(1)}%)</dd>
         <dt>功耗</dt><dd>${watts(g.power_w)} / ${watts(g.power_limit_w)}（最大 ${watts(g.power_max_w)}）</dd>
@@ -352,7 +330,6 @@ function renderConfig(n) {
     }).join("") || `<div class="muted">没有检测到 GPU</div>`;
     const models = (n.models || []).map((x) => `${x.name}${x.quant ? ` (${x.quant})` : ""}`).join("、") || "—";
     const links = (n.links || []).map((l) => `${l.kind} ${l.ip}`).join("；") || "—";
-    $("#config-hint").textContent = `最后心跳 ${timeText(n.last_seen)}`;
     $("#config-body").innerHTML = `
     <div class="config-section"><h3>节点</h3><dl class="kv compact">
       <dt>名称</dt><dd>${esc(n.name)}</dd><dt>节点 ID</dt><dd>${esc(n.id)}</dd>
@@ -364,7 +341,7 @@ function renderConfig(n) {
     <div class="config-section"><h3>CPU / 内存 / 磁盘</h3><dl class="kv compact">
       <dt>CPU</dt><dd>${esc(n.hardware.cpu_model)}</dd><dt>核心</dt><dd>${n.hardware.cpu_cores}</dd>
       <dt>频率</dt><dd>${clock(m.cpu_freq_mhz)} / ${clock(m.cpu_freq_max_mhz)}</dd><dt>温度</dt><dd>${temp(m.cpu_temp_c)}</dd>
-      <dt>CPU 功耗</dt><dd>${watts(m.cpu_power_w)} / ${watts(m.cpu_power_max_w)}</dd><dt>电源最大</dt><dd>${n.hardware.psu_watts ? n.hardware.psu_watts + " W" : "未检测"}</dd>
+      <dt>CPU 功耗</dt><dd>${watts(m.cpu_power_w)} / ${watts(m.cpu_power_max_w)}</dd>
       <dt>内存</dt><dd>${bytes(m.mem_used)} / ${bytes(m.mem_total)}</dd><dt>内存频率</dt><dd>${m.mem_freq_mhz ? m.mem_freq_mhz + " MHz" : "—"}</dd>
       <dt>磁盘</dt><dd>${esc(n.hardware.disk_path)} · 可用 ${bytes(n.hardware.disk_free)}</dd><dt>显存总功耗</dt><dd>${watts(a.power)} / ${watts(a.limit)}</dd>
     </dl></div>
