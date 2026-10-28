@@ -99,7 +99,23 @@ maio pull my-model --url ./x.gguf --sha256 <hex>
 `maio pull` 复用 V4 的 `model.Store`：断点续传、SHA-256 校验、GGUF 元数据解析、
 原子写入 `<data_dir>/models/<name>/`。`maio model list|show|rm|path` 继续可用。
 
-## 3. 配置
+## 3. CLI 自身
+
+```bash
+maio update --check      # 当前版本 / 最新 release
+maio update              # 下载、校验、原子替换
+maio update --force      # 忽略 apt 检测，直接替换
+```
+
+Linux 用 apt 安装时，`maio update` 会检测 dpkg 归属并提示：
+
+```bash
+sudo apt update && sudo apt install --only-upgrade maio-cluster
+```
+
+模型和插件仍然只用 `maio pull` / `maio install`，不经过 apt。
+
+## 4. 配置
 
 | 方式 | 作用 |
 | --- | --- |
@@ -110,14 +126,14 @@ maio pull my-model --url ./x.gguf --sha256 <hex>
 Web 服务在启动时读取 `MAIO_MARKET_URL`；未设置则用默认 raw 地址。市场响应缓存 30 秒，
 `--refresh` 或 `?refresh=1` 强制刷新。
 
-## 4. 安全
+## 5. 安全
 
 - 市场只提供元数据；插件包从 GitHub 拉取，安装前做路径/大小校验。
 - 模型下载不携带集群 token（`model.Store` 只对协调者 URL 附加 token）。
 - Web 登录使用集群 Token 换 HttpOnly Cookie；市场/插件/模型 API 全部要求认证。
 - 插件默认不执行；如果后续增加执行，应单独做权限与沙箱评审。
 
-## 5. 相关代码
+## 6. 相关代码
 
 | 路径 | 作用 |
 | --- | --- |
@@ -126,3 +142,4 @@ Web 服务在启动时读取 `MAIO_MARKET_URL`；未设置则用默认 raw 地�
 | `core/cluster/web_api.go` | 市场、插件、模型、Web 会话 API |
 | `web/` | 纯 TS/CSS 控制台（嵌入二进制） |
 | `core/cli/pkg_cmd.go` | `install` / `pull` / `plugins` / `market` / `web` |
+| `core/update` | `maio update` 的 release 检查、校验、自替换 |

@@ -1,5 +1,21 @@
 # Changelog
 
+## v4.1.1 — 2026-10-28
+
+### Added
+
+- **`maio update`**：从 GitHub Releases 检查/下载/校验/原子替换 CLI 自身；
+  `--check` 只检查，`--force` 覆盖；dpkg 安装时优先提示 apt 升级。
+- **apt 仓库**：`linux/packaging/build-apt-repo.sh` 生成 flat repo
+  （Packages/Release/deb/setup.sh），发布为 `ShieldDog-ACE/maio-apt`；
+  `sudo sh setup.sh` 即 `apt install maio-cluster`。
+- **默认 apt 安装路径**：README/安装脚本把 apt 作为 Linux 首选安装方式；
+  装完后模型/插件/CLI 更新统一走 maio（`pull` / `install` / `update`）。
+
+### Changed
+
+- 安装器默认版本 4.1.1；Linux 构建同时产出 tar 与 deb/apt repo。
+
 ## v4.1.0 — 2026-10-28
 
 V4.1 在 V4 的集群内核上增加包管理器、开源市场与可选 Web 控制台。

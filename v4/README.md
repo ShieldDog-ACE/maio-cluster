@@ -35,6 +35,30 @@ v4/
 | Web 控制台 | 纯 TS/CSS，登录后看节点/对话/模型/插件/市场；资源嵌入二进制，`maio web install` 才落盘 |
 | 快速查看 | V4 的 Android APK 保留但不演进；V4.1 以 Web 为正式终端 |
 
+## 安装（Linux，默认 apt）
+
+```bash
+curl -fsSL https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@main/setup.sh | sudo sh
+```
+
+等价于：
+
+```bash
+echo 'deb [trusted=yes] https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@main ./' | sudo tee /etc/apt/sources.list.d/maio.list
+sudo apt update && sudo apt install maio-cluster
+```
+
+装完 maio 后，**模型、插件、CLI 更新都走 maio 自己**：
+
+```bash
+sudo maio --system pull qwen2.5-0.5b
+sudo maio --system install hello
+maio update --check
+```
+
+macOS 用 `install/mac/install.sh`（tar 发布物）；Windows 用 zip 内的
+`install.ps1`。apt 仓库说明见 [linux/packaging/apt-README.md](linux/packaging/apt-README.md)。
+
 ## 0. V4.1 新东西
 
 ```bash
@@ -43,6 +67,7 @@ maio install hello                # 安装插件（GitHub 仓库）
 maio pull qwen2.5-0.5b            # 从市场下载模型
 maio web install                  # 安装可选 Web 控制台
 maio web status                   # 看目录/地址
+maio update --check               # 检查 CLI 自身更新
 ```
 
 市场仓库：<https://github.com/ShieldDog-ACE/maio-market>。
@@ -71,7 +96,7 @@ maio id
 ### A 机（协调者）
 
 ```bash
-sudo apt install ./dist/maio-cluster_4.1.0_amd64.deb
+sudo apt install ./dist/maio-cluster_4.1.1_amd64.deb
 sudo maio --system token set '<你的长期token>'  # 固定长期 token（可选）
 sudo maio --system cluster join-code     # 复制 MAIO1-... 配对码
 sudo maio --system pull qwen2.5-0.5b      # 从 maio-market 下载
@@ -82,7 +107,7 @@ sudo maio --system cluster nodes
 ### B 机（worker）
 
 ```bash
-sudo apt install ./dist/maio-cluster_4.1.0_amd64.deb
+sudo apt install ./dist/maio-cluster_4.1.1_amd64.deb
 sudo maio --system cluster join 'MAIO1-...'
 sudo systemctl restart maio
 sudo maio --system service install --worker   # 只跑 agent（可选）
@@ -115,7 +140,7 @@ sudo maio --system run qwen2.5-0.5b "只回答：分布式成功" --mode shard
 
 ```bash
 # macOS：pkg 或 tar
-sudo installer -pkg maio-cluster-4.1.0.pkg -target /
+sudo installer -pkg maio-cluster-4.1.1.pkg -target /
 sudo maio --system cluster join 'MAIO1-...'
 ```
 
@@ -178,7 +203,7 @@ make verify             # vet + race + 两节点 e2e
 产物：
 
 ```
-dist/maio-cluster_4.1.0_amd64.deb
+dist/maio-cluster_4.1.1_amd64.deb
 dist/linux-amd64/{maio,bin/llama-server,bin/ggml-rpc-server,install.sh}
 dist/maio-windows-amd64.zip
 dist/maio-mac-arm64.tar.gz, dist/maio-mac-amd64.tar.gz

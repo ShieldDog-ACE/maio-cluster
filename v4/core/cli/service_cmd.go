@@ -82,6 +82,7 @@ usage: maio [--system] [--config PATH] [--market URL] [--json] <command> [args]
   install <plugin>         install a plugin from the market
   pull <model>             download a model from the market
   plugins [list|rm|update] manage installed plugins
+  update [--check]         update the maio CLI from GitHub releases
   market [--plugins|--models] [--refresh]
   search <query>           search plugins and models
   web install|status|remove  optional web console

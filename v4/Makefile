@@ -7,14 +7,14 @@
 #   make verify            vet + race tests + two-node e2e
 #
 # Bundle llama.cpp RPC binaries with RPC_BIN=... LLAMA_BIN=...
-VERSION ?= 4.1.0
+VERSION ?= 4.1.1
 RPC_BIN ?=
 LLAMA_BIN ?=
 ANDROID_SDK ?=
 JAVA_HOME ?=
 
 .PHONY: all build build-all linux windows mac apk web package-linux package-windows \
-	package-mac test race vet fmt e2e verify runtime clean dist
+	package-apt package-mac test race vet fmt e2e verify runtime clean dist
 
 all: build-all
 
@@ -40,6 +40,9 @@ build-all: linux windows mac
 
 package-linux:
 	VERSION=$(VERSION) RPC_BIN="$(RPC_BIN)" LLAMA_BIN="$(LLAMA_BIN)" ./linux/packaging/build-deb.sh
+
+package-apt:
+	VERSION=$(VERSION) ARCH=$(ARCH) RPC_BIN="$(RPC_BIN)" LLAMA_BIN="$(LLAMA_BIN)" ./linux/packaging/build-apt-repo.sh
 
 package-windows: windows
 	@echo "Windows installer: dist/maio-windows-amd64.zip"

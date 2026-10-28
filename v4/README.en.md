@@ -26,6 +26,21 @@ The three platform directories contain only OS-specific paths, service
 management, runtime lookup and packaging. The cluster protocol and scheduler
 live once in `core/`.
 
+## Install (Linux, apt)
+
+```bash
+curl -fsSL https://cdn.jsdelivr.net/gh/ShieldDog-ACE/maio-apt@main/setup.sh | sudo sh
+```
+
+This adds a flat apt repository and installs `maio-cluster`. After that,
+models/plugins/CLI updates go through maio itself:
+
+```bash
+sudo maio --system pull qwen2.5-0.5b
+sudo maio --system install hello
+maio update --check
+```
+
 ## V4.1 in one minute
 
 ```bash
@@ -33,6 +48,7 @@ maio market                  # list market plugins/models
 maio install hello           # install a plugin from GitHub
 maio pull qwen2.5-0.5b       # download a model from the market
 maio web install             # optional web console
+maio update --check          # check the CLI itself
 ```
 
 Market: <https://github.com/ShieldDog-ACE/maio-market>. Plugins live in each
@@ -45,7 +61,7 @@ Machine A:
 
 ```bash
 maio id                # machine ID, node ID and registered token
-sudo apt install ./dist/maio-cluster_4.1.0_amd64.deb
+sudo apt install ./dist/maio-cluster_4.1.1_amd64.deb
 sudo maio --system token set '<long-lived-token>'   # optional fixed token
 sudo maio --system cluster join-code
 sudo maio --system pull qwen2.5-0.5b
@@ -55,7 +71,7 @@ sudo maio --system web install          # optional console
 Machine B:
 
 ```bash
-sudo apt install ./dist/maio-cluster_4.1.0_amd64.deb
+sudo apt install ./dist/maio-cluster_4.1.1_amd64.deb
 sudo maio --system cluster join 'MAIO1-...'
 sudo systemctl restart maio
 ```
@@ -105,7 +121,7 @@ make verify         # vet + race + two-node e2e
 Artifacts:
 
 ```
-dist/maio-cluster_4.1.0_amd64.deb
+dist/maio-cluster_4.1.1_amd64.deb
 dist/linux-amd64/{maio,bin/llama-server,bin/ggml-rpc-server,install.sh}
 dist/maio-windows-amd64.zip
 dist/maio-mac-arm64.tar.gz, dist/maio-mac-amd64.tar.gz

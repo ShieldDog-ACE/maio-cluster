@@ -64,6 +64,8 @@ func Run(ad platform.Adapter, args []string) int {
 		return opts.cmdMarket(sub)
 	case "search":
 		return opts.cmdSearch(sub)
+	case "update":
+		return opts.cmdUpdate(sub)
 	}
 	opts.paths = ad.Paths(opts.system)
 	if opts.configPath == "" {

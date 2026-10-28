@@ -2,7 +2,7 @@
 
 本目录是 maio 的**官方命令行安装入口**。它只做一件事：把 maio 装到机器上，并把“装什么”拆成两层。
 
-发布物：<https://github.com/ShieldDog-ACE/maio-cluster/releases/tag/v4.1.0>
+发布物：<https://github.com/ShieldDog-ACE/maio-cluster/releases/tag/v4.1.1>
 
 | 层 | 装什么 | 装法 | 必需 |
 | --- | --- | --- | --- |
@@ -71,7 +71,7 @@ bash install/mac/install.sh --from v4/dist/maio-mac-arm64.tar.gz
 发布物按版本归档，安装器默认从 `v<version>/` 下取：
 
 ```
-v4.1.0/
+v4.1.1/
 ├── maio-linux-amd64.tar.gz     (+ .sha256)
 ├── maio-linux-arm64.tar.gz
 ├── maio-mac-arm64.tar.gz
@@ -114,7 +114,7 @@ Web 产物已嵌入 `maio` 二进制：安装器只调用 `maio web install`，�
 
 ## 当前状态（V4.1）
 
-- CLI 安装器可用，已用 v4.1.0 的 `v4/dist/linux-amd64` 与 `maio-linux-amd64.tar.gz` 实测用户级离线安装。
+- CLI 安装器可用，已用 v4.1.1 的 `v4/dist/linux-amd64` 与 `maio-linux-amd64.tar.gz` 实测用户级离线安装。
 - V4.1 起 `--with-web` 直接调用 `maio web install`，Web 资源嵌入二进制，离线可装。
 - V3 的 `make deb` 与 V4 的 `v4/dist/` 保持原样；本目录是新增入口，不替代它们。
 

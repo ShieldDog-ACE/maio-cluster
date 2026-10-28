@@ -17,7 +17,7 @@ bash install.sh --no-start      # 只落盘，不装服务
 | --- | --- |
 | `--user` / `--system` | 作用域，默认 `--user`；`--system` 需要 root |
 | `--from PATH` | 本地安装包目录或 `.tar.gz`（离线安装） |
-| `--version V` | 发布版本，默认 `4.1.0` |
+| `--version V` | 发布版本，默认 `4.1.1` |
 | `--base-url URL` | 发布下载根地址；也可用 `MAIO_BASE_URL` |
 | `--sha256 HEX` | 安装包摘要；建议离线安装时固定 |
 | `--with-web` | 额外安装图形化组件 |
